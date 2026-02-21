@@ -12,13 +12,27 @@ import { MongoService } from './storage/mongo.js';
 import { initializePlayDlAuth } from './integrations/playDlAuth.js';
 import { sleep } from './utils/retry.js';
 import { MusicLibraryStore } from './bot/services/musicLibraryStore.js';
+import { PermissionService } from './bot/services/permissionService.js';
+import { MetricsRegistry } from './monitoring/metrics.js';
+import { MonitoringServer } from './monitoring/server.js';
+import { initializeSentry } from './monitoring/sentry.js';
 
 const startedAt = Date.now();
 const config = loadConfig();
 const logger = createLogger({ level: config.logLevel, name: 'fluxer-bot' });
+const metrics = new MetricsRegistry();
+const metricsSessionsActive = metrics.gauge('sessions_active', 'Number of active guild sessions');
+const metricsGatewayConnected = metrics.gauge('gateway_connected', 'Gateway connection state (1=connected)');
+const metricsGatewayReconnects = metrics.counter('gateway_reconnects_total', 'Gateway reconnect schedules');
+const metricsTracksStarted = metrics.counter('tracks_started_total', 'Tracks started');
+const metricsTrackErrors = metrics.counter('track_errors_total', 'Track playback errors');
+const metricsCommandsTotal = metrics.counter('commands_total', 'Commands processed by outcome');
+const metricsRestRetriesTotal = metrics.counter('rest_retries_total', 'REST retries triggered');
+
 dns.setDefaultResultOrder(config.dnsResultOrder);
 logger.info('DNS resolution order configured', { order: config.dnsResultOrder });
 await initializePlayDlAuth(config, logger.child('media-auth'));
+const errorReporter = await initializeSentry(config, logger.child('sentry'));
 
 const rest = new RestClient({
   token: config.token,
@@ -27,6 +41,9 @@ const rest = new RestClient({
   maxRetries: config.restMaxRetries,
   retryBaseDelayMs: config.restRetryBaseDelayMs,
   logger: logger.child('rest'),
+  metrics: {
+    restRetriesTotal: metricsRestRetriesTotal,
+  },
 });
 
 const mongo = new MongoService({
@@ -89,9 +106,44 @@ const sessions = new SessionManager({
   guildConfigs,
   logger: logger.child('sessions'),
 });
+metricsSessionsActive.set(0);
+metricsGatewayConnected.set(0);
+let gatewayConnected = false;
+
+gateway.on('open', () => {
+  gatewayConnected = true;
+  metricsGatewayConnected.set(1);
+});
+gateway.on('close', () => {
+  gatewayConnected = false;
+  metricsGatewayConnected.set(0);
+});
+gateway.on('reconnect_scheduled', () => {
+  metricsGatewayReconnects.inc(1);
+});
+
+sessions.on('trackStart', () => {
+  metricsTracksStarted.inc(1);
+  metricsSessionsActive.set(sessions.sessions.size);
+});
+sessions.on('trackError', () => {
+  metricsTrackErrors.inc(1);
+});
+sessions.on('destroyed', () => {
+  metricsSessionsActive.set(sessions.sessions.size);
+});
+const metricsSessionGaugeInterval = setInterval(() => {
+  metricsSessionsActive.set(sessions.sessions.size);
+}, 5_000);
+metricsSessionGaugeInterval.unref();
 
 const lyrics = new LyricsService(logger.child('lyrics'));
 const me = await verifyApiConnectivity();
+const permissions = new PermissionService({
+  rest,
+  botUserId: me?.id ?? null,
+  logger: logger.child('permissions'),
+});
 
 const router = new CommandRouter({
   config,
@@ -103,8 +155,34 @@ const router = new CommandRouter({
   voiceStateStore,
   lyrics,
   library: musicLibrary,
+  permissionService: permissions,
+  metrics: {
+    commandsTotal: metricsCommandsTotal,
+  },
+  errorReporter,
   botUserId: me?.id ?? null,
   startedAt,
+});
+
+let shuttingDown = false;
+const monitoringServer = new MonitoringServer({
+  enabled: config.monitoringEnabled,
+  host: config.monitoringHost,
+  port: config.monitoringPort,
+  logger: logger.child('monitoring'),
+  metrics,
+  getHealth: () => ({
+    ok: !shuttingDown && (gatewayConnected || Date.now() - startedAt < 60_000),
+    gatewayConnected,
+    shuttingDown,
+    sessions: sessions.sessions.size,
+    uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+  }),
+});
+await monitoringServer.start().catch((err) => {
+  logger.warn('Monitoring server failed to start', {
+    error: err instanceof Error ? err.message : String(err),
+  });
 });
 
 gateway.on('MESSAGE_CREATE', (message) => {
@@ -112,12 +190,12 @@ gateway.on('MESSAGE_CREATE', (message) => {
     logger.error('Unhandled MESSAGE_CREATE handler error', {
       error: err instanceof Error ? err.message : String(err),
     });
+    errorReporter?.captureException?.(err, { source: 'message_create_handler' });
   });
 });
 
 gateway.connect();
 
-let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -130,12 +208,19 @@ async function shutdown(signal) {
     });
   });
 
+  clearInterval(metricsSessionGaugeInterval);
   gateway.disconnect();
+  await monitoringServer.stop().catch((err) => {
+    logger.error('Monitoring server shutdown failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
   await mongo.close().catch((err) => {
     logger.error('MongoDB shutdown failed', {
       error: err instanceof Error ? err.message : String(err),
     });
   });
+  await errorReporter?.flush?.(1_500);
 
   setTimeout(() => {
     process.exit(0);
@@ -148,6 +233,22 @@ process.on('SIGINT', () => {
 
 process.on('SIGTERM', () => {
   shutdown('SIGTERM').catch(() => process.exit(1));
+});
+
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled promise rejection', {
+    error: reason instanceof Error ? reason.message : String(reason),
+  });
+  errorReporter?.captureException?.(reason instanceof Error ? reason : new Error(String(reason)), {
+    source: 'unhandled_rejection',
+  });
+});
+
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught exception', {
+    error: err instanceof Error ? err.message : String(err),
+  });
+  errorReporter?.captureException?.(err, { source: 'uncaught_exception' });
 });
 
 async function verifyApiConnectivity() {

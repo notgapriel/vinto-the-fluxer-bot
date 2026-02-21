@@ -17,6 +17,14 @@ Production-oriented music bot for Fluxer with resilient gateway/REST handling, m
   - command registry + aliases + usage metadata
   - centralized error handling
   - per-guild dynamic prefix parsing
+  - command modules split by domain (`index`, `libraryCommands`, `configCommands`)
+- Platform permission safety
+  - preflight checks for bot text-channel send permission
+  - preflight checks for bot voice connect/speak permission
+  - config commands bound to server-manage permissions
+- Global anti-spam rate limiting
+  - per-user and per-guild command windows
+  - configurable bypass list for low-risk commands
 - MongoDB-backed guild configuration
   - persistent server-level settings (prefix, DJ roles, autoplay, dedupe, 24/7, vote-skip thresholds, music log channel)
   - in-memory TTL cache to reduce DB load at scale
@@ -54,9 +62,16 @@ Production-oriented music bot for Fluxer with resilient gateway/REST handling, m
   - guild session manager
   - idle auto-disconnect
   - clean process/stream teardown
+- Operations/monitoring
+  - graceful shutdown on `SIGINT` / `SIGTERM`
+  - health/readiness endpoint (`/healthz`, `/readyz`)
+  - Prometheus metrics endpoint (`/metrics`)
+  - optional Sentry exception reporting (`SENTRY_DSN`)
 - Command safety
+  - global per-user and per-guild command rate limiting
   - per-user `play` cooldown to reduce spam bursts
 - Built-in tests for parser, queue, session cleanup, and guild config store
+  - command-level tests for help output, permission gates, and rate limiting
 
 ## Commands
 
@@ -125,6 +140,12 @@ npm install
   - optional scale/feature tuning:
   - `MAX_SAVED_PLAYLISTS_PER_GUILD`, `MAX_SAVED_TRACKS_PER_PLAYLIST`, `MAX_FAVORITES_PER_USER`
   - `PERSISTENT_HISTORY_SIZE`, `SEARCH_RESULT_LIMIT`, `SEARCH_PICK_TIMEOUT_MS`
+  - anti-spam + monitoring:
+  - `COMMAND_RATE_LIMIT_ENABLED`, `COMMAND_USER_WINDOW_MS`, `COMMAND_USER_MAX`
+  - `COMMAND_GUILD_WINDOW_MS`, `COMMAND_GUILD_MAX`, `COMMAND_RATE_LIMIT_BYPASS`
+  - `MONITORING_ENABLED`, `MONITORING_HOST`, `MONITORING_PORT`
+  - optional error reporting:
+  - `SENTRY_DSN`, `SENTRY_ENVIRONMENT`
 
 3. Start bot:
 
@@ -165,10 +186,16 @@ and add `SPOTIFY_REDIRECT_URI` in your Spotify app dashboard.
   - robust API transport wrapper
 - `src/bot/`
   - `commandRouter.js`, command registry, session manager, voice state store
+  - `commands/index.js` + domain modules (`configCommands.js`, `libraryCommands.js`)
   - services:
   - `guildConfigStore.js` (guild settings cache + persistence)
   - `musicLibraryStore.js` (persistent playlists/favorites/history)
+  - `permissionService.js` (effective bot permission checks)
   - `lyricsService.js`
+- `src/monitoring/`
+  - `metrics.js` (Prometheus registry)
+  - `server.js` (health/ready/metrics HTTP server)
+  - `sentry.js` (optional Sentry integration)
 - `src/player/`
   - queue + music playback pipeline
 - `src/storage/`
@@ -183,3 +210,7 @@ and add `SPOTIFY_REDIRECT_URI` in your Spotify app dashboard.
 - Spotify direct support needs valid Spotify credentials in env.
 - SoundCloud direct support needs a client id (env or auto-fetch at startup).
 - The bot uses text commands intentionally for compatibility with currently documented Fluxer bot APIs.
+- Legal docs for public operation are included:
+  - `LICENSE`
+  - `TERMS.md`
+  - `PRIVACY.md`

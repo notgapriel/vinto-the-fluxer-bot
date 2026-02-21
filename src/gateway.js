@@ -335,6 +335,11 @@ export class Gateway extends EventEmitter {
       reconnectAttempts: this.reconnectAttempts,
       delay,
     });
+    this.emit('reconnect_scheduled', {
+      reason,
+      reconnectAttempts: this.reconnectAttempts,
+      delayMs: delay,
+    });
 
     this.reconnectTimeoutHandle = setTimeout(() => {
       this.reconnectTimeoutHandle = null;

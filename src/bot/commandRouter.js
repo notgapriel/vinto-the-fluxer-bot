@@ -3,6 +3,7 @@ import { parseCommand } from '../utils/commandParser.js';
 import { makeResponder } from './messageFormatter.js';
 import { CommandRegistry } from './commandRegistry.js';
 import { registerCommands } from './commands/index.js';
+import { CommandRateLimiter } from './services/commandRateLimiter.js';
 
 export class CommandRouter {
   constructor(options) {
@@ -15,8 +16,20 @@ export class CommandRouter {
     this.voiceStateStore = options.voiceStateStore;
     this.lyrics = options.lyrics;
     this.library = options.library ?? null;
+    this.permissionService = options.permissionService ?? null;
     this.botUserId = options.botUserId ?? null;
     this.startedAt = options.startedAt;
+    this.metrics = options.metrics ?? null;
+    this.errorReporter = options.errorReporter ?? null;
+    this.commandRateLimiter = options.commandRateLimiter ?? new CommandRateLimiter({
+      logger: this.logger?.child?.('rate-limit'),
+      enabled: this.config.commandRateLimitEnabled,
+      userWindowMs: this.config.commandUserWindowMs,
+      userMaxCommands: this.config.commandUserMax,
+      guildWindowMs: this.config.commandGuildWindowMs,
+      guildMaxCommands: this.config.commandGuildMax,
+      bypassCommands: this.config.commandRateLimitBypass,
+    });
 
     this.responder = makeResponder(this.rest, {
       enableEmbeds: this.config.enableEmbeds,
@@ -43,6 +56,7 @@ export class CommandRouter {
 
     const command = this.registry.resolve(parsed.name);
     if (!command) {
+      this.metrics?.commandsTotal?.inc?.(1, { command: parsed.name.toLowerCase(), outcome: 'unknown' });
       await this._safeReply(message.channel_id, 'warning', `Unknown command: \`${parsed.name}\``);
       return;
     }
@@ -56,18 +70,50 @@ export class CommandRouter {
     }
 
     try {
+      if (context.guildId && this.permissionService) {
+        const canSend = await this.permissionService.canBotSendMessages(context.guildId, context.channelId);
+        if (canSend === false) {
+          this.logger?.warn?.('Bot lacks send permission in command channel', {
+            guildId: context.guildId,
+            channelId: context.channelId,
+            command: command.name,
+          });
+          this.metrics?.commandsTotal?.inc?.(1, { command: command.name, outcome: 'blocked_bot_send_perm' });
+          return;
+        }
+      }
+
+      const rateCheck = this.commandRateLimiter.consume({
+        guildId: context.guildId,
+        userId: context.authorId,
+        commandName: command.name,
+      });
+      if (!rateCheck.allowed) {
+        const retrySec = Math.max(0.1, (rateCheck.retryAfterMs ?? 1_000) / 1000).toFixed(1);
+        throw new ValidationError(`Rate limit hit (${rateCheck.scope}). Please retry in ${retrySec}s.`);
+      }
+
       await command.execute(context);
+      this.metrics?.commandsTotal?.inc?.(1, { command: command.name, outcome: 'success' });
     } catch (err) {
       if (err instanceof ValidationError) {
+        this.metrics?.commandsTotal?.inc?.(1, { command: command.name, outcome: 'validation_error' });
         await context.reply.warning(err.message);
         return;
       }
 
+      this.metrics?.commandsTotal?.inc?.(1, { command: command.name, outcome: 'internal_error' });
       this.logger?.error?.('Command execution failed', {
         command: command.name,
         guildId: context.guildId,
         channelId: context.channelId,
         error: err instanceof Error ? err.message : String(err),
+      });
+      this.errorReporter?.captureException?.(err, {
+        source: 'command_router',
+        command: command.name,
+        guildId: context.guildId,
+        channelId: context.channelId,
       });
 
       await context.reply.error('Command failed unexpectedly. Please try again.');
@@ -89,6 +135,7 @@ export class CommandRouter {
       voiceStateStore: this.voiceStateStore,
       lyrics: this.lyrics,
       library: this.library,
+      permissionService: this.permissionService,
       botUserId: this.botUserId,
       registry: this.registry,
       startedAt: this.startedAt,

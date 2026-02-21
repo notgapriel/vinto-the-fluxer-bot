@@ -125,6 +125,23 @@ export function loadConfig(env = process.env) {
     playCommandCooldownMs: parseNonNegativeInt(env.PLAY_COMMAND_COOLDOWN_MS, 2_000),
     searchResultLimit: parsePositiveInt(env.SEARCH_RESULT_LIMIT, 5),
     searchPickTimeoutMs: parsePositiveInt(env.SEARCH_PICK_TIMEOUT_MS, 45_000),
+
+    commandRateLimitEnabled: parseBool(env.COMMAND_RATE_LIMIT_ENABLED, true),
+    commandUserWindowMs: parsePositiveInt(env.COMMAND_USER_WINDOW_MS, 10_000),
+    commandUserMax: parsePositiveInt(env.COMMAND_USER_MAX, 8),
+    commandGuildWindowMs: parsePositiveInt(env.COMMAND_GUILD_WINDOW_MS, 10_000),
+    commandGuildMax: parsePositiveInt(env.COMMAND_GUILD_MAX, 40),
+    commandRateLimitBypass: String(env.COMMAND_RATE_LIMIT_BYPASS ?? 'help,ping')
+      .split(',')
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean),
+
+    monitoringEnabled: parseBool(env.MONITORING_ENABLED, true),
+    monitoringHost: (env.MONITORING_HOST ?? '0.0.0.0').trim() || '0.0.0.0',
+    monitoringPort: parsePositiveInt(env.MONITORING_PORT, 9091),
+
+    sentryDsn: env.SENTRY_DSN?.trim() || null,
+    sentryEnvironment: (env.SENTRY_ENVIRONMENT?.trim() || env.NODE_ENV?.trim() || 'production'),
   };
 
   if (!config.mongoUri) {

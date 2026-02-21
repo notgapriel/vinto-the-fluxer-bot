@@ -94,6 +94,7 @@ export class RestClient {
     this.maxRetries = options.maxRetries ?? 4;
     this.retryBaseDelayMs = options.retryBaseDelayMs ?? 300;
     this.logger = options.logger;
+    this.metrics = options.metrics ?? null;
   }
 
   async request(method, path, options = {}) {
@@ -128,6 +129,10 @@ export class RestClient {
           attempt,
           delayMs,
           error: restErr.message,
+        });
+        this.metrics?.restRetriesTotal?.inc?.(1, {
+          method: upperMethod,
+          path,
         });
 
         await sleep(delayMs);
