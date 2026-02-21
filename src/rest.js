@@ -229,6 +229,14 @@ export class RestClient {
     return this.request('GET', `/channels/${channelId}`);
   }
 
+  async getGuild(guildId) {
+    return this.request('GET', `/guilds/${guildId}`);
+  }
+
+  async getGuildMember(guildId, userId) {
+    return this.request('GET', `/guilds/${guildId}/members/${userId}`);
+  }
+
   async sendTyping(channelId) {
     return this.request('POST', `/channels/${channelId}/typing`, { retryUnsafe: false });
   }

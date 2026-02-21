@@ -55,7 +55,6 @@ const guildConfigs = new GuildConfigStore({
       voteSkipMinVotes: config.voteSkipMinVotes,
       djRoleIds: [],
       musicLogChannelId: null,
-      language: 'en',
     },
   },
 });

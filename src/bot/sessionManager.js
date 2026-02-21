@@ -42,13 +42,6 @@ function toChannelId(value) {
   return /^\d{6,}$/.test(normalized) ? normalized : null;
 }
 
-function toLanguage(value, fallback) {
-  const normalized = String(value ?? '').trim().toLowerCase();
-  if (!normalized) return fallback;
-  if (normalized === 'en' || normalized === 'de') return normalized;
-  return fallback;
-}
-
 function defaultSettings(config) {
   return {
     autoplayEnabled: Boolean(config.defaultAutoplayEnabled),
@@ -58,7 +51,6 @@ function defaultSettings(config) {
     voteSkipMinVotes: toPositiveInt(config.voteSkipMinVotes, 2),
     djRoleIds: new Set(),
     musicLogChannelId: null,
-    language: 'en',
   };
 }
 
@@ -74,7 +66,6 @@ function settingsFromGuildConfig(config, guildConfig) {
     voteSkipMinVotes: toPositiveInt(source.voteSkipMinVotes, defaults.voteSkipMinVotes),
     djRoleIds: toRoleSet(source.djRoleIds),
     musicLogChannelId: toChannelId(source.musicLogChannelId),
-    language: toLanguage(source.language, defaults.language),
   };
 }
 

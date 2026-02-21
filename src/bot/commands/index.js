@@ -7,8 +7,12 @@ const HISTORY_PAGE_SIZE = 10;
 const PLAYLIST_PAGE_SIZE = 10;
 const FAVORITES_PAGE_SIZE = 10;
 const SEARCH_RESULT_DEFAULT_LIMIT = 5;
+const PERMISSION_CACHE_TTL_MS = 60_000;
+const ADMINISTRATOR_PERMISSION = 1n << 3n;
+const MANAGE_GUILD_PERMISSION = 1n << 5n;
 const playCooldowns = new Map();
 const pendingSearchSelections = new Map();
+const manageGuildPermissionCache = new Map();
 
 function parseVoiceChannelArgument(args) {
   if (!args?.length) return { channelId: null, rest: args ?? [] };
@@ -363,6 +367,252 @@ function clearSearchSelection(ctx) {
   pendingSearchSelections.delete(searchSelectionKey(ctx));
 }
 
+function normalizePermissionName(name) {
+  return String(name ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, '_');
+}
+
+function permissionNameToBit(name) {
+  const normalized = normalizePermissionName(name);
+  if (!normalized) return null;
+
+  if (normalized === 'ADMINISTRATOR' || normalized === 'ADMIN') {
+    return ADMINISTRATOR_PERMISSION;
+  }
+
+  if (
+    normalized === 'MANAGE_GUILD'
+    || normalized === 'MANAGE_SERVER'
+    || normalized === 'SERVER_MANAGE'
+    || normalized === 'MANAGE_GUILD_SETTINGS'
+  ) {
+    return MANAGE_GUILD_PERMISSION;
+  }
+
+  return null;
+}
+
+function extractPermissionBits(value, depth = 0) {
+  if (depth > 4 || value == null) return null;
+
+  if (typeof value === 'bigint') return value;
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return BigInt(Math.trunc(value));
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    if (/^\d+$/.test(trimmed)) {
+      return BigInt(trimmed);
+    }
+
+    const parts = trimmed.split(/[,\s|]+/).filter(Boolean);
+    let bits = 0n;
+    let matched = false;
+    for (const part of parts) {
+      const bit = permissionNameToBit(part);
+      if (!bit) continue;
+      bits |= bit;
+      matched = true;
+    }
+    return matched ? bits : null;
+  }
+
+  if (Array.isArray(value)) {
+    let bits = 0n;
+    let matched = false;
+    for (const item of value) {
+      const fromItem = extractPermissionBits(item, depth + 1);
+      if (fromItem == null) continue;
+      bits |= fromItem;
+      matched = true;
+    }
+    return matched ? bits : null;
+  }
+
+  if (typeof value === 'object') {
+    if (value.permissions !== undefined && value.permissions !== value) {
+      const nested = extractPermissionBits(value.permissions, depth + 1);
+      if (nested != null) return nested;
+    }
+
+    if (value.bitfield !== undefined && value.bitfield !== value) {
+      const nested = extractPermissionBits(value.bitfield, depth + 1);
+      if (nested != null) return nested;
+    }
+
+    let bits = 0n;
+    let matched = false;
+    for (const [key, enabled] of Object.entries(value)) {
+      if (enabled !== true) continue;
+      const bit = permissionNameToBit(key);
+      if (!bit) continue;
+      bits |= bit;
+      matched = true;
+    }
+    return matched ? bits : null;
+  }
+
+  return null;
+}
+
+function hasManageGuildFromBits(bits) {
+  if (bits == null) return null;
+  return Boolean((bits & ADMINISTRATOR_PERMISSION) !== 0n || (bits & MANAGE_GUILD_PERMISSION) !== 0n);
+}
+
+function getManageGuildFromMessagePayload(ctx) {
+  const ownerId = ctx.message?.guild?.owner_id ?? ctx.message?.guild_owner_id ?? null;
+  if (ownerId && ctx.authorId && String(ownerId) === String(ctx.authorId)) {
+    return true;
+  }
+
+  const candidates = [
+    ctx.message?.member?.permissions,
+    ctx.message?.member?.permission,
+    ctx.message?.member_permissions,
+    ctx.message?.permissions,
+    ctx.message?.member?.permission_names,
+    ctx.message?.member?.permission_overwrites,
+  ];
+
+  for (const candidate of candidates) {
+    const bits = extractPermissionBits(candidate);
+    const verdict = hasManageGuildFromBits(bits);
+    if (verdict != null) {
+      return verdict;
+    }
+  }
+
+  return null;
+}
+
+function permissionCacheKey(ctx) {
+  return `${String(ctx.guildId ?? '')}:${String(ctx.authorId ?? '')}`;
+}
+
+function getCachedManageGuildPermission(ctx) {
+  const key = permissionCacheKey(ctx);
+  if (!key || key === ':') return null;
+
+  const entry = manageGuildPermissionCache.get(key);
+  if (!entry) return null;
+
+  if (entry.expiresAt <= Date.now()) {
+    manageGuildPermissionCache.delete(key);
+    return null;
+  }
+
+  return entry.value;
+}
+
+function setCachedManageGuildPermission(ctx, value) {
+  const key = permissionCacheKey(ctx);
+  if (!key || key === ':') return;
+
+  manageGuildPermissionCache.set(key, {
+    value,
+    expiresAt: Date.now() + PERMISSION_CACHE_TTL_MS,
+  });
+}
+
+function extractRoleIdsFromMember(member) {
+  if (!member) return [];
+  if (Array.isArray(member.roles)) return member.roles.map((id) => String(id));
+  if (Array.isArray(member.role_ids)) return member.role_ids.map((id) => String(id));
+  return [];
+}
+
+function computeMemberPermissionBitsFromGuild(member, guild) {
+  const roleIds = extractRoleIdsFromMember(member);
+  if (!roleIds.length || !Array.isArray(guild?.roles)) return null;
+
+  const roleMap = new Map();
+  for (const role of guild.roles) {
+    const id = String(role?.id ?? '');
+    if (!id) continue;
+    roleMap.set(id, role);
+  }
+
+  let bits = 0n;
+  let matched = false;
+  for (const roleId of roleIds) {
+    const role = roleMap.get(String(roleId));
+    if (!role) continue;
+    const roleBits = extractPermissionBits(role.permissions ?? role.permission);
+    if (roleBits == null) continue;
+    bits |= roleBits;
+    matched = true;
+  }
+
+  return matched ? bits : null;
+}
+
+async function getManageGuildFromRest(ctx) {
+  if (!ctx.rest?.getGuildMember || !ctx.rest?.getGuild || !ctx.guildId || !ctx.authorId) {
+    return null;
+  }
+
+  let member;
+  try {
+    member = await ctx.rest.getGuildMember(ctx.guildId, ctx.authorId);
+  } catch {
+    return null;
+  }
+
+  const directBits = extractPermissionBits(
+    member?.permissions
+    ?? member?.permission
+    ?? member?.member?.permissions
+  );
+  const directVerdict = hasManageGuildFromBits(directBits);
+  if (directVerdict != null) return directVerdict;
+
+  let guild;
+  try {
+    guild = await ctx.rest.getGuild(ctx.guildId);
+  } catch {
+    return null;
+  }
+
+  const guildOwnerId = guild?.owner_id ?? guild?.ownerId ?? null;
+  if (guildOwnerId && String(guildOwnerId) === String(ctx.authorId)) {
+    return true;
+  }
+
+  const computedBits = computeMemberPermissionBitsFromGuild(member, guild);
+  const computedVerdict = hasManageGuildFromBits(computedBits);
+  if (computedVerdict != null) return computedVerdict;
+
+  return null;
+}
+
+async function resolveManageGuildPermission(ctx) {
+  const fromMessage = getManageGuildFromMessagePayload(ctx);
+  if (fromMessage != null) {
+    setCachedManageGuildPermission(ctx, fromMessage);
+    return fromMessage;
+  }
+
+  const cached = getCachedManageGuildPermission(ctx);
+  if (cached != null) {
+    return cached;
+  }
+
+  const fromRest = await getManageGuildFromRest(ctx);
+  if (fromRest != null) {
+    setCachedManageGuildPermission(ctx, fromRest);
+    return fromRest;
+  }
+
+  return null;
+}
+
 function userHasDjAccess(ctx, session) {
   const djRoles = session.settings.djRoleIds;
   if (!djRoles || djRoles.size === 0) return true;
@@ -387,6 +637,17 @@ function ensureDjAccess(ctx, session, actionLabel) {
 function ensureDjAccessByConfig(ctx, guildConfig, actionLabel) {
   if (userHasDjAccessByConfig(ctx, guildConfig)) return;
   throw new ValidationError(`You need a DJ role to ${actionLabel}.`);
+}
+
+async function ensureManageGuildAccess(ctx, actionLabel) {
+  const permission = await resolveManageGuildPermission(ctx);
+  if (permission === true) return;
+
+  if (permission === false) {
+    throw new ValidationError(`You need the "Manage Server" permission to ${actionLabel}.`);
+  }
+
+  throw new ValidationError('Could not verify your server permissions right now. Try again in a few seconds.');
 }
 
 function ensureSessionTrack(ctx, session) {
@@ -428,6 +689,54 @@ function createCommand(definition) {
   return Object.freeze(definition);
 }
 
+function chunkLines(lines, maxChunkLength = 950) {
+  const chunks = [];
+  let current = [];
+  let currentLength = 0;
+
+  for (const line of lines) {
+    const lineLength = line.length + (current.length ? 1 : 0);
+    if (current.length && currentLength + lineLength > maxChunkLength) {
+      chunks.push(current);
+      current = [line];
+      currentLength = line.length;
+      continue;
+    }
+
+    current.push(line);
+    currentLength += lineLength;
+  }
+
+  if (current.length) {
+    chunks.push(current);
+  }
+
+  return chunks;
+}
+
+function commandCategory(commandName) {
+  const name = String(commandName ?? '').toLowerCase();
+
+  if (['help', 'ping', 'stats'].includes(name)) return 'Utility';
+  if (['join', 'leave'].includes(name)) return 'Voice';
+  if (['queue', 'history', 'remove', 'clear', 'shuffle'].includes(name)) return 'Queue';
+  if (['playlist', 'fav', 'favs', 'ufav', 'favplay'].includes(name)) return 'Library';
+  if ([
+    'autoplay',
+    'dedupe',
+    '247',
+    'djrole',
+    'prefix',
+    'musiclog',
+    'voteskipcfg',
+    'settings',
+  ].includes(name)) {
+    return 'Configuration';
+  }
+
+  return 'Playback';
+}
+
 export function registerCommands(registry) {
   registry.register(createCommand({
     name: 'help',
@@ -435,12 +744,32 @@ export function registerCommands(registry) {
     description: 'Show all available commands.',
     usage: 'help',
     async execute(ctx) {
-      const rows = ctx.registry.list().map((cmd) => {
+      const categories = new Map();
+      for (const cmd of ctx.registry.list()) {
+        const category = commandCategory(cmd.name);
         const aliases = cmd.aliases?.length ? ` (aliases: ${cmd.aliases.join(', ')})` : '';
-        return `\`${ctx.prefix}${cmd.usage}\` - ${cmd.description}${aliases}`;
-      });
+        const line = `\`${ctx.prefix}${cmd.usage}\` - ${cmd.description}${aliases}`;
+        if (!categories.has(category)) categories.set(category, []);
+        categories.get(category).push(line);
+      }
 
-      await ctx.reply.info('Commands', [{ name: 'Available', value: rows.join('\n').slice(0, 1000) }]);
+      const order = ['Playback', 'Queue', 'Library', 'Voice', 'Configuration', 'Utility'];
+      const fields = [];
+      for (const category of order) {
+        const rows = categories.get(category);
+        if (!rows?.length) continue;
+
+        const chunks = chunkLines(rows, 950);
+        for (let i = 0; i < chunks.length; i += 1) {
+          const suffix = chunks.length > 1 ? ` (${i + 1}/${chunks.length})` : '';
+          fields.push({
+            name: `${category}${suffix}`,
+            value: chunks[i].join('\n'),
+          });
+        }
+      }
+
+      await ctx.reply.info('Commands by category', fields.slice(0, 25));
     },
   }));
 
@@ -1448,7 +1777,7 @@ export function registerCommands(registry) {
     async execute(ctx) {
       ensureGuild(ctx);
       const guildConfig = await getGuildConfigOrThrow(ctx);
-      ensureDjAccessByConfig(ctx, guildConfig, 'change autoplay');
+      await ensureManageGuildAccess(ctx, 'change autoplay');
 
       if (!ctx.args.length) {
         await ctx.reply.info(`Autoplay is currently **${guildConfig.settings.autoplayEnabled ? 'on' : 'off'}**.`);
@@ -1474,7 +1803,7 @@ export function registerCommands(registry) {
     async execute(ctx) {
       ensureGuild(ctx);
       const guildConfig = await getGuildConfigOrThrow(ctx);
-      ensureDjAccessByConfig(ctx, guildConfig, 'change dedupe mode');
+      await ensureManageGuildAccess(ctx, 'change dedupe mode');
 
       if (!ctx.args.length) {
         await ctx.reply.info(`Dedupe is currently **${guildConfig.settings.dedupeEnabled ? 'on' : 'off'}**.`);
@@ -1501,7 +1830,7 @@ export function registerCommands(registry) {
     async execute(ctx) {
       ensureGuild(ctx);
       const guildConfig = await getGuildConfigOrThrow(ctx);
-      ensureDjAccessByConfig(ctx, guildConfig, 'change 24/7 mode');
+      await ensureManageGuildAccess(ctx, 'change 24/7 mode');
 
       if (!ctx.args.length) {
         await ctx.reply.info(`24/7 mode is currently **${guildConfig.settings.stayInVoiceEnabled ? 'on' : 'off'}**.`);
@@ -1528,7 +1857,7 @@ export function registerCommands(registry) {
     async execute(ctx) {
       ensureGuild(ctx);
       const guildConfig = await getGuildConfigOrThrow(ctx);
-      ensureDjAccessByConfig(ctx, guildConfig, 'manage DJ roles');
+      await ensureManageGuildAccess(ctx, 'manage DJ roles');
 
       const action = String(ctx.args[0] ?? 'list').toLowerCase();
       if (action === 'list') {
@@ -1586,7 +1915,7 @@ export function registerCommands(registry) {
     async execute(ctx) {
       ensureGuild(ctx);
       const guildConfig = await getGuildConfigOrThrow(ctx);
-      ensureDjAccessByConfig(ctx, guildConfig, 'change the command prefix');
+      await ensureManageGuildAccess(ctx, 'change the command prefix');
 
       if (!ctx.args.length) {
         await ctx.reply.info(`Current prefix is **${guildConfig.prefix}**.`);
@@ -1607,7 +1936,7 @@ export function registerCommands(registry) {
     async execute(ctx) {
       ensureGuild(ctx);
       const guildConfig = await getGuildConfigOrThrow(ctx);
-      ensureDjAccessByConfig(ctx, guildConfig, 'change music log channel');
+      await ensureManageGuildAccess(ctx, 'change music log channel');
 
       if (!ctx.args.length) {
         const current = guildConfig.settings.musicLogChannelId;
@@ -1641,33 +1970,6 @@ export function registerCommands(registry) {
   }));
 
   registry.register(createCommand({
-    name: 'language',
-    aliases: ['lang'],
-    description: 'Set guild language baseline (`en`/`de`).',
-    usage: 'language [en|de]',
-    async execute(ctx) {
-      ensureGuild(ctx);
-      const guildConfig = await getGuildConfigOrThrow(ctx);
-      ensureDjAccessByConfig(ctx, guildConfig, 'change language');
-
-      if (!ctx.args.length) {
-        await ctx.reply.info(`Current language: **${guildConfig.settings.language}**`);
-        return;
-      }
-
-      const next = String(ctx.args[0] ?? '').trim().toLowerCase();
-      if (!['en', 'de'].includes(next)) {
-        throw new ValidationError('Language must be `en` or `de`.');
-      }
-
-      const updated = await updateGuildConfig(ctx, {
-        settings: { language: next },
-      });
-      await ctx.reply.success(`Language updated to **${updated.settings.language}**.`);
-    },
-  }));
-
-  registry.register(createCommand({
     name: 'voteskipcfg',
     aliases: ['vscfg'],
     description: 'Configure vote-skip threshold per guild.',
@@ -1675,7 +1977,7 @@ export function registerCommands(registry) {
     async execute(ctx) {
       ensureGuild(ctx);
       const guildConfig = await getGuildConfigOrThrow(ctx);
-      ensureDjAccessByConfig(ctx, guildConfig, 'configure vote-skip');
+      await ensureManageGuildAccess(ctx, 'configure vote-skip');
 
       if (!ctx.args.length) {
         await ctx.reply.info('Vote-skip configuration', [
@@ -1736,7 +2038,6 @@ export function registerCommands(registry) {
         { name: '24/7', value: guildConfig.settings.stayInVoiceEnabled ? 'on' : 'off', inline: true },
         { name: 'Vote Ratio', value: String(guildConfig.settings.voteSkipRatio), inline: true },
         { name: 'Vote Min', value: String(guildConfig.settings.voteSkipMinVotes), inline: true },
-        { name: 'Language', value: guildConfig.settings.language, inline: true },
         { name: 'DJ Roles', value: roles },
         { name: 'Music Log Channel', value: guildConfig.settings.musicLogChannelId ? `<#${guildConfig.settings.musicLogChannelId}>` : 'disabled' },
         { name: 'Session Active', value: session ? 'yes' : 'no', inline: true },

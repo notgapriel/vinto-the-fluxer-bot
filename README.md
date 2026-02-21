@@ -18,8 +18,9 @@ Production-oriented music bot for Fluxer with resilient gateway/REST handling, m
   - centralized error handling
   - per-guild dynamic prefix parsing
 - MongoDB-backed guild configuration
-  - persistent server-level settings (prefix, DJ roles, autoplay, dedupe, 24/7, vote-skip thresholds, language, music log channel)
+  - persistent server-level settings (prefix, DJ roles, autoplay, dedupe, 24/7, vote-skip thresholds, music log channel)
   - in-memory TTL cache to reduce DB load at scale
+  - configuration changes are permission-gated by server-level manage permissions (not DJ role)
 - MongoDB-backed music library
   - persistent guild playlists
   - persistent user favorites
@@ -43,7 +44,8 @@ Production-oriented music bot for Fluxer with resilient gateway/REST handling, m
   - tempo/pitch controls
   - autoplay when queue is empty
   - dedupe mode (skip duplicate tracks)
-  - DJ role restrictions
+- DJ role restrictions
+  - DJ role controls playback actions only (skip/pause/volume/effects/etc.)
   - lyrics lookup command
   - 24/7 mode (stay connected while idle)
   - playlist ingest (YouTube playlists, plus Spotify/SoundCloud/Deezer URL ingestion)
@@ -99,7 +101,6 @@ Prefix defaults to `!`.
 - `djrole [add|remove|clear|list] [@role|roleId]`
 - `prefix [newPrefix]`
 - `musiclog [off|#channel|channelId]` (`logchannel`)
-- `language [en|de]` (`lang`)
 - `voteskipcfg [ratio <0..1>|min <number>]` (`vscfg`)
 - `settings` (`cfg`, `config`)
 - `lyrics [artist - title]`
