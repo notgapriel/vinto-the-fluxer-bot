@@ -137,6 +137,9 @@ npm install
   - optional for full source support:
   - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REFRESH_TOKEN`
   - `SOUNDCLOUD_CLIENT_ID` (or keep `SOUNDCLOUD_AUTO_CLIENT_ID=1`)
+  - optional for hardened YouTube fallback:
+  - `YTDLP_BIN`, `YTDLP_COOKIES_FILE` or `YTDLP_COOKIES_FROM_BROWSER`
+  - `YTDLP_YOUTUBE_CLIENT`, `YTDLP_EXTRA_ARGS`
   - optional scale/feature tuning:
   - `MAX_SAVED_PLAYLISTS_PER_GUILD`, `MAX_SAVED_TRACKS_PER_PLAYLIST`, `MAX_FAVORITES_PER_USER`
   - `PERSISTENT_HISTORY_SIZE`, `SEARCH_RESULT_LIMIT`, `SEARCH_PICK_TIMEOUT_MS`
@@ -206,6 +209,7 @@ and add `SPOTIFY_REDIRECT_URI` in your Spotify app dashboard.
 ## Notes
 
 - `ffmpeg` and `yt-dlp` should be available on the host (or set `FFMPEG_BIN` / `YTDLP_BIN`).
+- If YouTube responds with "Sign in to confirm you’re not a bot", configure `YTDLP_COOKIES_FILE` (cookies.txt) or `YTDLP_COOKIES_FROM_BROWSER`.
 - Guild-specific settings are persisted in MongoDB collection `guild_configs`.
 - Spotify direct support needs valid Spotify credentials in env.
 - SoundCloud direct support needs a client id (env or auto-fetch at startup).

@@ -111,6 +111,10 @@ export function loadConfig(env = process.env) {
 
     ffmpegBin: env.FFMPEG_BIN?.trim() || null,
     ytdlpBin: env.YTDLP_BIN?.trim() || null,
+    ytdlpCookiesFile: env.YTDLP_COOKIES_FILE?.trim() || null,
+    ytdlpCookiesFromBrowser: env.YTDLP_COOKIES_FROM_BROWSER?.trim() || null,
+    ytdlpYoutubeClient: env.YTDLP_YOUTUBE_CLIENT?.trim() || null,
+    ytdlpExtraArgs: env.YTDLP_EXTRA_ARGS?.trim() || null,
 
     defaultAutoplayEnabled: parseBool(env.DEFAULT_AUTOPLAY_ENABLED, false),
     defaultDedupeEnabled: parseBool(env.DEFAULT_DEDUPE_ENABLED, false),

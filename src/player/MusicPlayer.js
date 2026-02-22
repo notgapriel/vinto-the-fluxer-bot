@@ -147,7 +147,22 @@ function isBenignYouTubeFallbackError(err) {
     || message.includes('video id')
     || message.includes('playability')
     || message.includes('signature')
+    || message.includes('sign in to confirm')
+    || message.includes('not a bot')
   );
+}
+
+function isYouTubeBotCheckError(err) {
+  const message = String(err?.message ?? err ?? '').toLowerCase();
+  return message.includes('sign in to confirm') || message.includes('not a bot');
+}
+
+function parseCsvArgs(value) {
+  if (!value) return [];
+  return String(value)
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function sanitizeUrlToSearchQuery(url) {
@@ -200,6 +215,12 @@ export class MusicPlayer extends EventEmitter {
 
     this.ffmpegBin = options.ffmpegBin || process.env.FFMPEG_BIN || ffmpegPath || 'ffmpeg';
     this.ytdlpBin = options.ytdlpBin || process.env.YTDLP_BIN || null;
+    this.ytdlpCookiesFile = options.ytdlpCookiesFile || process.env.YTDLP_COOKIES_FILE || null;
+    this.ytdlpCookiesFromBrowser = options.ytdlpCookiesFromBrowser || process.env.YTDLP_COOKIES_FROM_BROWSER || null;
+    this.ytdlpYoutubeClient = options.ytdlpYoutubeClient || process.env.YTDLP_YOUTUBE_CLIENT || null;
+    this.ytdlpExtraArgs = Array.isArray(options.ytdlpExtraArgs)
+      ? options.ytdlpExtraArgs
+      : parseCsvArgs(options.ytdlpExtraArgs || process.env.YTDLP_EXTRA_ARGS || null);
 
     this.maxQueueSize = options.maxQueueSize ?? 100;
     this.maxPlaylistTracks = options.maxPlaylistTracks ?? 25;
@@ -1193,12 +1214,20 @@ export class MusicPlayer extends EventEmitter {
 
   async _startYtDlpPipeline(url) {
     this.sourceProc = await this._spawnYtDlp(url);
+    this.sourceProc.stderr?.setEncoding?.('utf8');
+
+    let stderr = '';
+    const onStderr = (chunk) => {
+      stderr = `${stderr}${chunk}`.slice(-4096);
+    };
+    this.sourceProc.stderr?.on?.('data', onStderr);
 
     this.ffmpeg = await this._spawnProcess(this.ffmpegBin, this._ffmpegArgs(), {
       stdio: ['pipe', 'pipe', 'ignore'],
     });
 
     this._bindPipelineErrorHandler(this.sourceProc.stdout, 'sourceProc.stdout');
+    this._bindPipelineErrorHandler(this.sourceProc.stderr, 'sourceProc.stderr');
     this._bindPipelineErrorHandler(this.ffmpeg.stdin, 'ffmpeg.stdin');
     this._bindPipelineErrorHandler(this.ffmpeg.stdout, 'ffmpeg.stdout');
 
@@ -1206,6 +1235,17 @@ export class MusicPlayer extends EventEmitter {
     this.sourceProc.once('close', () => {
       this.ffmpeg?.stdin?.end();
     });
+
+    try {
+      await this._awaitProcessOutput(this.sourceProc, 6_000);
+    } catch (err) {
+      if (stderr.trim()) {
+        throw new Error(stderr.trim().split('\n').slice(-2).join(' | '));
+      }
+      throw err;
+    } finally {
+      this.sourceProc.stderr?.off?.('data', onStderr);
+    }
   }
 
   _ffmpegArgs() {
@@ -1252,7 +1292,32 @@ export class MusicPlayer extends EventEmitter {
   }
 
   async _spawnYtDlp(url) {
-    const commonArgs = ['--no-playlist', '--quiet', '--no-warnings', '-f', 'bestaudio/best', '-o', '-', url];
+    const commonArgs = [
+      '--ignore-config',
+      '--no-playlist',
+      '--quiet',
+      '--no-warnings',
+      '--no-progress',
+      '--extractor-retries', '3',
+      '--fragment-retries', '3',
+      '--retry-sleep', 'fragment:1:3',
+      '-f', 'bestaudio/best',
+    ];
+
+    if (this.ytdlpYoutubeClient) {
+      commonArgs.push('--extractor-args', `youtube:player_client=${this.ytdlpYoutubeClient}`);
+    }
+    if (this.ytdlpCookiesFile) {
+      commonArgs.push('--cookies', this.ytdlpCookiesFile);
+    }
+    if (this.ytdlpCookiesFromBrowser) {
+      commonArgs.push('--cookies-from-browser', this.ytdlpCookiesFromBrowser);
+    }
+    if (this.ytdlpExtraArgs.length) {
+      commonArgs.push(...this.ytdlpExtraArgs);
+    }
+
+    commonArgs.push('-o', '-', url);
     const candidates = [];
 
     if (this.ytdlpBin) {
@@ -1268,7 +1333,7 @@ export class MusicPlayer extends EventEmitter {
     let lastErr = null;
     for (const [cmd, args] of candidates) {
       try {
-        return await this._spawnProcess(cmd, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+        return await this._spawnProcess(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
       } catch (err) {
         if (err?.code === 'ENOENT') {
           lastErr = err;
@@ -1279,6 +1344,51 @@ export class MusicPlayer extends EventEmitter {
     }
 
     throw new Error(`yt-dlp not found (${lastErr?.message ?? 'command not available'})`);
+  }
+
+  _awaitProcessOutput(proc, timeoutMs = 5_000) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let sawOutput = false;
+      const timeout = setTimeout(() => {
+        if (settled || sawOutput) return;
+        cleanup();
+        reject(new Error('yt-dlp did not produce audio output in time.'));
+      }, timeoutMs);
+
+      const onData = () => {
+        sawOutput = true;
+        if (settled) return;
+        cleanup();
+        resolve();
+      };
+
+      const onClose = (code, signal) => {
+        if (settled || sawOutput) return;
+        cleanup();
+        const codeLabel = code == null ? 'unknown' : String(code);
+        const signalLabel = signal ? `, signal=${signal}` : '';
+        reject(new Error(`yt-dlp exited before output (code=${codeLabel}${signalLabel}).`));
+      };
+
+      const onError = (err) => {
+        if (settled || sawOutput) return;
+        cleanup();
+        reject(err instanceof Error ? err : new Error(String(err)));
+      };
+
+      const cleanup = () => {
+        settled = true;
+        clearTimeout(timeout);
+        proc.stdout?.off?.('data', onData);
+        proc.off?.('close', onClose);
+        proc.off?.('error', onError);
+      };
+
+      proc.stdout?.on?.('data', onData);
+      proc.on?.('close', onClose);
+      proc.on?.('error', onError);
+    });
   }
 
   _spawnProcess(cmd, args, options) {
@@ -1403,6 +1513,11 @@ export class MusicPlayer extends EventEmitter {
     }
     if (err?.code === 'ENOENT' && /yt[_-]?dlp/i.test(String(err?.path ?? ''))) {
       return new Error('yt-dlp is not available. Install yt-dlp or set YTDLP_BIN.');
+    }
+    if (isYouTubeBotCheckError(err)) {
+      return new Error(
+        'YouTube requested bot verification. Configure YTDLP_COOKIES_FILE or YTDLP_COOKIES_FROM_BROWSER and update yt-dlp.'
+      );
     }
 
     if (err instanceof ValidationError) return err;
