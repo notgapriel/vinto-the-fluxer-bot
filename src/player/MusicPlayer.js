@@ -553,10 +553,6 @@ export class MusicPlayer extends EventEmitter {
     this.playing = true;
     this.paused = false;
     this.skipRequested = false;
-    this._startPlaybackClock(track.seekStartSec ?? 0);
-
-    this.emit('trackStart', track);
-    this.logger?.info?.('Playback started', { title: track.title, url: track.url, seek: track.seekStartSec ?? 0 });
 
     try {
       this._clearPipelineState();
@@ -568,6 +564,9 @@ export class MusicPlayer extends EventEmitter {
       }
 
       await this.voice.sendAudio(this.ffmpeg.stdout);
+      this._startPlaybackClock(track.seekStartSec ?? 0);
+      this.emit('trackStart', track);
+      this.logger?.info?.('Playback started', { title: track.title, url: track.url, seek: track.seekStartSec ?? 0 });
 
       this.ffmpeg.once('close', async (code, signal) => {
         await this._handleTrackClose(track, code, signal);
@@ -1202,21 +1201,18 @@ export class MusicPlayer extends EventEmitter {
       await this._startPlayDlPipeline(url, seekSec);
       return;
     } catch (err) {
-      if (seekSec > 0) {
-        throw err;
-      }
-
       const errorMessage = err instanceof Error ? err.message : String(err);
       const logFn = isBenignYouTubeFallbackError(err) ? 'debug' : 'warn';
       this.logger?.[logFn]?.('play-dl youtube pipeline failed, trying yt-dlp fallback', {
         error: errorMessage,
+        seekSec,
       });
     }
 
-    await this._startYtDlpPipeline(url);
+    await this._startYtDlpPipeline(url, seekSec);
   }
 
-  async _startYtDlpPipeline(url) {
+  async _startYtDlpPipeline(url, seekSec = 0) {
     this.sourceProc = await this._spawnYtDlp(url);
     this.sourceProc.stderr?.setEncoding?.('utf8');
 
@@ -1226,7 +1222,7 @@ export class MusicPlayer extends EventEmitter {
     };
     this.sourceProc.stderr?.on?.('data', onStderr);
 
-    this.ffmpeg = await this._spawnProcess(this.ffmpegBin, this._ffmpegArgs(), {
+    this.ffmpeg = await this._spawnProcess(this.ffmpegBin, this._ffmpegArgs(seekSec), {
       stdio: ['pipe', 'pipe', 'ignore'],
     });
 
@@ -1241,7 +1237,10 @@ export class MusicPlayer extends EventEmitter {
     });
 
     try {
-      await this._awaitProcessOutput(this.sourceProc, 6_000);
+      const waitTimeoutMs = seekSec > 0
+        ? Math.min(30_000, 6_000 + (Math.max(0, Number.parseInt(String(seekSec), 10) || 0) * 50))
+        : 6_000;
+      await this._awaitProcessOutput(this.sourceProc, waitTimeoutMs);
     } catch (err) {
       if (stderr.trim()) {
         throw new Error(stderr.trim().split('\n').slice(-2).join(' | '));
@@ -1252,20 +1251,31 @@ export class MusicPlayer extends EventEmitter {
     }
   }
 
-  _ffmpegArgs() {
+  _ffmpegArgs(seekSec = 0) {
     const normalizedVolume = clamp(this.volumePercent, this.minVolumePercent, this.maxVolumePercent);
     const volumeFactor = (normalizedVolume / 100).toFixed(2);
     const filterChain = this._buildAudioFilterChain(volumeFactor);
+    const seek = Math.max(0, Number.parseInt(String(seekSec), 10) || 0);
 
-    return [
+    const args = [
       '-i', 'pipe:0',
+    ];
+
+    if (seek > 0) {
+      // Output-side seek keeps yt-dlp fallback usable even when play-dl seek fails.
+      args.push('-ss', String(seek));
+    }
+
+    args.push(
       '-ac', '2',
       '-ar', '48000',
       '-af', filterChain,
       '-f', 's16le',
       '-acodec', 'pcm_s16le',
       'pipe:1',
-    ];
+    );
+
+    return args;
   }
 
   _buildAudioFilterChain(volumeFactor) {
