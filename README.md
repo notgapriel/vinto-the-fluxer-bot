@@ -26,7 +26,7 @@ Production-oriented music bot for Fluxer with resilient gateway/REST handling, m
   - per-user and per-guild command windows
   - configurable bypass list for low-risk commands
 - MongoDB-backed guild configuration
-  - persistent server-level settings (prefix, DJ roles, autoplay, dedupe, 24/7, vote-skip thresholds, music log channel)
+  - persistent server-level settings (prefix, DJ roles, dedupe, 24/7, vote-skip thresholds, music log channel)
   - in-memory TTL cache to reduce DB load at scale
   - configuration changes are permission-gated by server-level manage permissions (not DJ role)
 - MongoDB-backed music library
@@ -50,7 +50,7 @@ Production-oriented music bot for Fluxer with resilient gateway/REST handling, m
   - filter presets (`bassboost`, `nightcore`, `vaporwave`, `8d`, `soft`, `karaoke`, `radio`)
   - EQ presets (`flat`, `pop`, `rock`, `edm`, `vocal`)
   - tempo/pitch controls
-  - autoplay when queue is empty
+  - autoplay command is temporarily disabled
   - dedupe mode (skip duplicate tracks)
 - DJ role restrictions
   - DJ role controls playback actions only (skip/pause/volume/effects/etc.)
@@ -78,6 +78,7 @@ Production-oriented music bot for Fluxer with resilient gateway/REST handling, m
 Prefix defaults to `!`.
 
 - `help`
+- `support` (`discord`, `server`)
 - `ping`
 - `join [#voice-channel]`
 - `leave` (`disconnect`, `dc`, `stop`)
@@ -105,7 +106,7 @@ Prefix defaults to `!`.
 - `tempo <0.5-2.0>`
 - `pitch <-12..12>`
 - `effects` (`fxstate`)
-- `autoplay [on|off]`
+- `autoplay [on|off]` (temporarily disabled)
 - `dedupe [on|off]`
 - `247 [on|off]`
 - `playlist <create|add|remove|show|list|delete|play> ...` (`pl`)
@@ -120,6 +121,19 @@ Prefix defaults to `!`.
 - `settings` (`cfg`, `config`)
 - `lyrics [artist - title]`
 - `stats`
+- `mood [chill|hype|retro|clean|radio]`
+- `panel [setup|refresh|off] [#channel]`
+- `musicwebhook [set <url>|off|show]`
+- `queueguard [show|on|off|maxperwindow <n>|window <n>|maxartiststreak <n>]`
+- `template <save|play|list|show|delete> ...`
+- `charts [days]`
+- `recap [show|set #channel|off|now]`
+- `voiceprofile [set|show|clear] [#channel] [mood]`
+- `reputation [@user|id]`
+- `taste [@user|id]`
+- `handoff [@user|id|off|show] [minutes]`
+- `party [start|join|vote|status|end]`
+- `import [preview|apply|cancel] ...`
 
 ## Setup
 
@@ -139,7 +153,7 @@ npm install
   - `SOUNDCLOUD_CLIENT_ID` (or keep `SOUNDCLOUD_AUTO_CLIENT_ID=1`)
   - optional for hardened YouTube fallback:
   - `YTDLP_BIN`, `YTDLP_COOKIES_FILE` or `YTDLP_COOKIES_FROM_BROWSER`
-  - `YTDLP_YOUTUBE_CLIENT`, `YTDLP_EXTRA_ARGS`
+  - `YTDLP_YOUTUBE_CLIENT`, `YTDLP_EXTRA_ARGS` (leave unset unless needed)
   - optional scale/feature tuning:
   - `MAX_SAVED_PLAYLISTS_PER_GUILD`, `MAX_SAVED_TRACKS_PER_PLAYLIST`, `MAX_FAVORITES_PER_USER`
   - `PERSISTENT_HISTORY_SIZE`, `SEARCH_RESULT_LIMIT`, `SEARCH_PICK_TIMEOUT_MS`

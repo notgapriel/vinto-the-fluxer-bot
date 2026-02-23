@@ -11,6 +11,8 @@ export function registerLibraryCommands(registry, h) {
     normalizeIndex,
     trackLabel,
     ensureConnectedSession,
+    resolveQueueGuard,
+    applyVoiceProfileIfConfigured,
   } = h;
 
   registry.register(createCommand({
@@ -178,9 +180,14 @@ export function registerLibraryCommands(registry, h) {
         }
 
         const session = await ensureConnectedSession(ctx);
+        if (applyVoiceProfileIfConfigured) {
+          await applyVoiceProfileIfConfigured(ctx, session);
+        }
         const queueTracks = playlist.tracks.map((track) => session.player.createTrackFromData(track, ctx.authorId));
+        const queueGuard = resolveQueueGuard ? await resolveQueueGuard(ctx) : null;
         const added = session.player.enqueueResolvedTracks(queueTracks, {
           dedupe: session.settings.dedupeEnabled,
+          queueGuard,
         });
 
         if (!added.length) {
@@ -238,6 +245,15 @@ export function registerLibraryCommands(registry, h) {
       if (!result.added) {
         await ctx.reply.info('Track is already in your favorites.');
         return;
+      }
+
+      if (library.recordUserSignal) {
+        await library.recordUserSignal(
+          ctx.guildId ?? '000000',
+          ctx.authorId,
+          'favorite',
+          baseTrack
+        ).catch(() => null);
       }
 
       await ctx.reply.success(`Saved to favorites: ${trackLabel(result.track)}`);
@@ -317,9 +333,14 @@ export function registerLibraryCommands(registry, h) {
       }
 
       const session = await ensureConnectedSession(ctx);
+      if (applyVoiceProfileIfConfigured) {
+        await applyVoiceProfileIfConfigured(ctx, session);
+      }
       const track = session.player.createTrackFromData(favorite, ctx.authorId);
+      const queueGuard = resolveQueueGuard ? await resolveQueueGuard(ctx) : null;
       const added = session.player.enqueueResolvedTracks([track], {
         dedupe: session.settings.dedupeEnabled,
+        queueGuard,
       });
       if (!added.length) {
         await ctx.reply.warning('Favorite is already in queue (dedupe enabled).');

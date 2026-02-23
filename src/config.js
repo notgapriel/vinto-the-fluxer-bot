@@ -73,6 +73,7 @@ export function loadConfig(env = process.env) {
     autoGatewayUrl: parseBool(env.AUTO_GATEWAY_URL, true),
     strictStartupCheck: parseBool(env.STRICT_STARTUP_CHECK, false),
     enableEmbeds: parseBool(env.ENABLE_EMBEDS, true),
+    allowDefaultPrefixFallback: parseBool(env.ALLOW_DEFAULT_PREFIX_FALLBACK, false),
 
     apiCheckRetries: parsePositiveInt(env.API_CHECK_RETRIES, 5),
     apiCheckDelayMs: parsePositiveInt(env.API_CHECK_DELAY_MS, 1_000),

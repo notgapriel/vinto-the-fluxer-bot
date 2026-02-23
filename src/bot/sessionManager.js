@@ -44,7 +44,7 @@ function toChannelId(value) {
 
 function defaultSettings(config) {
   return {
-    autoplayEnabled: Boolean(config.defaultAutoplayEnabled),
+    autoplayEnabled: false,
     dedupeEnabled: Boolean(config.defaultDedupeEnabled),
     stayInVoiceEnabled: Boolean(config.defaultStayInVoiceEnabled),
     voteSkipRatio: toRatio(config.voteSkipRatio, 0.5),
@@ -59,7 +59,7 @@ function settingsFromGuildConfig(config, guildConfig) {
   const source = guildConfig?.settings ?? {};
 
   return {
-    autoplayEnabled: toBool(source.autoplayEnabled, defaults.autoplayEnabled),
+    autoplayEnabled: false,
     dedupeEnabled: toBool(source.dedupeEnabled, defaults.dedupeEnabled),
     stayInVoiceEnabled: toBool(source.stayInVoiceEnabled, defaults.stayInVoiceEnabled),
     voteSkipRatio: toRatio(source.voteSkipRatio, defaults.voteSkipRatio),
@@ -292,25 +292,6 @@ export class SessionManager extends EventEmitter {
   }
 
   async _handleQueueEmpty(session) {
-    if (session.settings.autoplayEnabled) {
-      try {
-        const added = await session.player.enqueueAutoplayTrack();
-        if (added) {
-          this.touch(session.guildId);
-          this.emit('autoplayQueued', { session, track: added });
-          if (!session.player.playing) {
-            await session.player.play();
-          }
-          return;
-        }
-      } catch (err) {
-        this.emit('autoplayFailed', {
-          session,
-          error: err instanceof Error ? err : new Error(String(err)),
-        });
-      }
-    }
-
     this.emit('queueEmpty', { session });
 
     if (session.settings.stayInVoiceEnabled) {

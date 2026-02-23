@@ -82,6 +82,9 @@ export class MusicLibraryStore {
     this.guildPlaylists = options.guildPlaylistsCollection;
     this.userFavorites = options.userFavoritesCollection;
     this.guildHistory = options.guildHistoryCollection;
+    this.guildFeatures = options.guildFeaturesCollection ?? null;
+    this.userProfiles = options.userProfilesCollection ?? null;
+    this.guildRecaps = options.guildRecapsCollection ?? null;
     this.logger = options.logger;
 
     this.maxPlaylistsPerGuild = toPositiveInt(options.maxPlaylistsPerGuild, 100);
@@ -100,12 +103,398 @@ export class MusicLibraryStore {
     await this.guildHistory.createIndex({ guildId: 1 }, { unique: true });
     await this.guildHistory.createIndex({ updatedAt: -1 });
 
+    if (this.guildFeatures) {
+      await this.guildFeatures.createIndex({ guildId: 1 }, { unique: true });
+      await this.guildFeatures.createIndex({ updatedAt: -1 });
+    }
+
+    if (this.userProfiles) {
+      await this.userProfiles.createIndex({ userId: 1 }, { unique: true });
+      await this.userProfiles.createIndex({ updatedAt: -1 });
+    }
+
+    if (this.guildRecaps) {
+      await this.guildRecaps.createIndex({ guildId: 1 }, { unique: true });
+      await this.guildRecaps.createIndex({ updatedAt: -1 });
+    }
+
     this.logger?.info?.('Music library store ready', {
       maxPlaylistsPerGuild: this.maxPlaylistsPerGuild,
       maxTracksPerPlaylist: this.maxTracksPerPlaylist,
       maxFavoritesPerUser: this.maxFavoritesPerUser,
       maxHistoryTracks: this.maxHistoryTracks,
+      featureCollectionsEnabled: Boolean(this.guildFeatures && this.userProfiles && this.guildRecaps),
     });
+  }
+
+  _ensureFeatureCollection(collection, label) {
+    if (!collection) {
+      throw new ValidationError(`${label} collection is unavailable.`);
+    }
+    return collection;
+  }
+
+  _sanitizeFeaturePatch(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const next = {};
+    for (const [key, entry] of Object.entries(value)) {
+      if (!key || key.startsWith('$') || key.includes('.')) continue;
+      next[key] = entry;
+    }
+    return next;
+  }
+
+  _defaultGuildFeatureConfig(guildId) {
+    return {
+      guildId,
+      recapChannelId: null,
+      webhookUrl: null,
+      sessionPanelChannelId: null,
+      sessionPanelMessageId: null,
+      queueTemplates: [],
+      voiceProfiles: [],
+      queueGuard: {
+        enabled: false,
+        maxPerRequesterWindow: 5,
+        windowSize: 25,
+        maxArtistStreak: 3,
+      },
+      updatedAt: null,
+      createdAt: null,
+    };
+  }
+
+  async getGuildFeatureConfig(guildId) {
+    const normalizedGuildId = normalizeGuildId(guildId);
+    if (!this.guildFeatures) {
+      return this._defaultGuildFeatureConfig(normalizedGuildId);
+    }
+
+    const doc = await this.guildFeatures.findOne(
+      { guildId: normalizedGuildId },
+      { projection: { _id: 0 } }
+    );
+    if (!doc) return this._defaultGuildFeatureConfig(normalizedGuildId);
+
+    return {
+      ...this._defaultGuildFeatureConfig(normalizedGuildId),
+      ...doc,
+      queueTemplates: Array.isArray(doc.queueTemplates) ? doc.queueTemplates : [],
+      voiceProfiles: Array.isArray(doc.voiceProfiles) ? doc.voiceProfiles : [],
+      queueGuard: {
+        ...this._defaultGuildFeatureConfig(normalizedGuildId).queueGuard,
+        ...(doc.queueGuard ?? {}),
+      },
+    };
+  }
+
+  async patchGuildFeatureConfig(guildId, patch) {
+    const normalizedGuildId = normalizeGuildId(guildId);
+    const collection = this._ensureFeatureCollection(this.guildFeatures, 'Guild features');
+    const safePatch = this._sanitizeFeaturePatch(patch);
+    const now = new Date();
+
+    const setPatch = {};
+    for (const [key, value] of Object.entries(safePatch)) {
+      if (value === undefined) continue;
+      setPatch[key] = value;
+    }
+    setPatch.updatedAt = now;
+
+    await collection.updateOne(
+      { guildId: normalizedGuildId },
+      {
+        $setOnInsert: {
+          guildId: normalizedGuildId,
+          createdAt: now,
+        },
+        $set: setPatch,
+      },
+      { upsert: true }
+    );
+
+    return this.getGuildFeatureConfig(normalizedGuildId);
+  }
+
+  async setQueueTemplate(guildId, name, tracks, createdBy = null) {
+    const normalizedGuildId = normalizeGuildId(guildId);
+    const templateName = normalizePlaylistName(name);
+    const templateKey = normalizePlaylistNameKey(name);
+    const normalizedTracks = (Array.isArray(tracks) ? tracks : []).map((track) => normalizeTrack(track, createdBy));
+    if (!normalizedTracks.length) {
+      throw new ValidationError('Template requires at least one track.');
+    }
+
+    const config = await this.getGuildFeatureConfig(normalizedGuildId);
+    const templates = Array.isArray(config.queueTemplates) ? [...config.queueTemplates] : [];
+    const existingIndex = templates.findIndex((entry) => entry?.key === templateKey);
+    const payload = {
+      key: templateKey,
+      name: templateName,
+      tracks: normalizedTracks.slice(0, this.maxSavedTracksPerPlaylist),
+      updatedBy: createdBy ? String(createdBy) : null,
+      updatedAt: new Date(),
+    };
+
+    if (existingIndex >= 0) {
+      templates[existingIndex] = payload;
+    } else {
+      templates.push(payload);
+    }
+
+    await this.patchGuildFeatureConfig(normalizedGuildId, {
+      queueTemplates: templates,
+    });
+
+    return payload;
+  }
+
+  async listQueueTemplates(guildId) {
+    const config = await this.getGuildFeatureConfig(guildId);
+    return Array.isArray(config.queueTemplates) ? config.queueTemplates : [];
+  }
+
+  async getQueueTemplate(guildId, name) {
+    const templateKey = normalizePlaylistNameKey(name);
+    const templates = await this.listQueueTemplates(guildId);
+    return templates.find((entry) => entry?.key === templateKey) ?? null;
+  }
+
+  async deleteQueueTemplate(guildId, name) {
+    const templateKey = normalizePlaylistNameKey(name);
+    const config = await this.getGuildFeatureConfig(guildId);
+    const templates = Array.isArray(config.queueTemplates) ? config.queueTemplates : [];
+    const next = templates.filter((entry) => entry?.key !== templateKey);
+    if (next.length === templates.length) return false;
+
+    await this.patchGuildFeatureConfig(guildId, { queueTemplates: next });
+    return true;
+  }
+
+  async setVoiceProfile(guildId, channelId, patch) {
+    const normalizedGuildId = normalizeGuildId(guildId);
+    const normalizedChannelId = normalizeGuildId(channelId);
+    const config = await this.getGuildFeatureConfig(normalizedGuildId);
+    const profiles = Array.isArray(config.voiceProfiles) ? [...config.voiceProfiles] : [];
+    const idx = profiles.findIndex((entry) => entry?.channelId === normalizedChannelId);
+    const next = {
+      channelId: normalizedChannelId,
+      ...(idx >= 0 ? profiles[idx] : {}),
+      ...this._sanitizeFeaturePatch(patch),
+      updatedAt: new Date(),
+    };
+    if (idx >= 0) profiles[idx] = next;
+    else profiles.push(next);
+
+    await this.patchGuildFeatureConfig(normalizedGuildId, { voiceProfiles: profiles });
+    return next;
+  }
+
+  async getVoiceProfile(guildId, channelId) {
+    const normalizedChannelId = normalizeGuildId(channelId);
+    const config = await this.getGuildFeatureConfig(guildId);
+    const profiles = Array.isArray(config.voiceProfiles) ? config.voiceProfiles : [];
+    return profiles.find((entry) => entry?.channelId === normalizedChannelId) ?? null;
+  }
+
+  _tokensFromTrack(track) {
+    const title = String(track?.title ?? '').toLowerCase();
+    const artist = String(track?.artist ?? track?.requestedByArtist ?? '').toLowerCase();
+    const words = `${title} ${artist}`
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((word) => word.length >= 3 && !['official', 'video', 'lyrics', 'audio', 'feat'].includes(word));
+    return words.slice(0, 8);
+  }
+
+  _applyUserProfileSignal(profile, guildId, signal, track = null) {
+    const safeGuildId = normalizeGuildId(guildId);
+    const safeSignal = String(signal ?? '').toLowerCase();
+    const next = profile && typeof profile === 'object' ? { ...profile } : {};
+    const now = new Date();
+
+    const guildStats = Array.isArray(next.guildStats) ? [...next.guildStats] : [];
+    let stats = guildStats.find((entry) => entry.guildId === safeGuildId);
+    if (!stats) {
+      stats = { guildId: safeGuildId, plays: 0, skips: 0, favorites: 0, score: 0 };
+      guildStats.push(stats);
+    }
+
+    if (safeSignal === 'play') {
+      stats.plays += 1;
+      stats.score += 1;
+    } else if (safeSignal === 'skip') {
+      stats.skips += 1;
+      stats.score -= 1;
+    } else if (safeSignal === 'favorite') {
+      stats.favorites += 1;
+      stats.score += 2;
+    }
+
+    const tokens = this._tokensFromTrack(track);
+    const taste = Array.isArray(next.taste) ? [...next.taste] : [];
+    for (const token of tokens) {
+      const row = taste.find((entry) => entry.term === token);
+      if (row) {
+        row.count += 1;
+      } else {
+        taste.push({ term: token, count: 1 });
+      }
+    }
+    taste.sort((a, b) => b.count - a.count);
+
+    return {
+      ...next,
+      guildStats,
+      taste: taste.slice(0, 80),
+      updatedAt: now,
+    };
+  }
+
+  async recordUserSignal(guildId, userId, signal, track = null) {
+    const normalizedGuildId = normalizeGuildId(guildId);
+    const normalizedUserId = normalizeUserId(userId);
+    const collection = this._ensureFeatureCollection(this.userProfiles, 'User profiles');
+    const current = await collection.findOne({ userId: normalizedUserId }, { projection: { _id: 0 } });
+    const next = this._applyUserProfileSignal(current, normalizedGuildId, signal, track);
+    next.userId = normalizedUserId;
+    if (!next.createdAt) next.createdAt = new Date();
+    await collection.updateOne(
+      { userId: normalizedUserId },
+      { $set: next, $setOnInsert: { createdAt: next.createdAt } },
+      { upsert: true }
+    );
+    return next;
+  }
+
+  async getUserProfile(userId, guildId = null) {
+    const normalizedUserId = normalizeUserId(userId);
+    if (!this.userProfiles) {
+      return { userId: normalizedUserId, guildScore: 0, guildStats: null, taste: [] };
+    }
+
+    const doc = await this.userProfiles.findOne({ userId: normalizedUserId }, { projection: { _id: 0 } });
+    if (!doc) {
+      return { userId: normalizedUserId, guildScore: 0, guildStats: null, taste: [] };
+    }
+
+    let guildStats = null;
+    if (guildId) {
+      const safeGuildId = normalizeGuildId(guildId);
+      guildStats = (Array.isArray(doc.guildStats) ? doc.guildStats : []).find((entry) => entry.guildId === safeGuildId) ?? null;
+    }
+
+    return {
+      userId: normalizedUserId,
+      guildScore: guildStats?.score ?? 0,
+      guildStats,
+      taste: Array.isArray(doc.taste) ? doc.taste : [],
+    };
+  }
+
+  async getGuildTopTracks(guildId, days = 7, limit = 10) {
+    const normalizedGuildId = normalizeGuildId(guildId);
+    const safeDays = Math.max(1, Math.min(90, toPositiveInt(days, 7)));
+    const safeLimit = Math.max(1, Math.min(50, toPositiveInt(limit, 10)));
+    const since = Date.now() - (safeDays * 24 * 60 * 60 * 1000);
+
+    const doc = await this.guildHistory.findOne(
+      { guildId: normalizedGuildId },
+      { projection: { _id: 0, tracks: 1 } }
+    );
+    const tracks = Array.isArray(doc?.tracks) ? doc.tracks : [];
+    const map = new Map();
+    for (const track of tracks) {
+      const playedAtTs = track?.playedAt ? Date.parse(track.playedAt) : NaN;
+      if (Number.isFinite(playedAtTs) && playedAtTs < since) continue;
+      const key = String(track?.url ?? '').trim().toLowerCase() || String(track?.title ?? '').trim().toLowerCase();
+      if (!key) continue;
+      const entry = map.get(key) ?? {
+        title: track?.title ?? 'Unknown title',
+        url: track?.url ?? '',
+        duration: track?.duration ?? 'Unknown',
+        plays: 0,
+      };
+      entry.plays += 1;
+      map.set(key, entry);
+    }
+
+    return [...map.values()]
+      .sort((a, b) => b.plays - a.plays)
+      .slice(0, safeLimit);
+  }
+
+  async buildGuildRecap(guildId, days = 7) {
+    const normalizedGuildId = normalizeGuildId(guildId);
+    const safeDays = Math.max(1, Math.min(30, toPositiveInt(days, 7)));
+    const topTracks = await this.getGuildTopTracks(normalizedGuildId, safeDays, 10);
+    const doc = await this.guildHistory.findOne(
+      { guildId: normalizedGuildId },
+      { projection: { _id: 0, tracks: 1 } }
+    );
+    const tracks = Array.isArray(doc?.tracks) ? doc.tracks : [];
+    const since = Date.now() - (safeDays * 24 * 60 * 60 * 1000);
+    const requesterMap = new Map();
+    let playCount = 0;
+
+    for (const track of tracks) {
+      const playedAtTs = track?.playedAt ? Date.parse(track.playedAt) : NaN;
+      if (Number.isFinite(playedAtTs) && playedAtTs < since) continue;
+      playCount += 1;
+      const requester = String(track?.requestedBy ?? '').trim();
+      if (!requester) continue;
+      requesterMap.set(requester, (requesterMap.get(requester) ?? 0) + 1);
+    }
+
+    const topRequesters = [...requesterMap.entries()]
+      .map(([userId, plays]) => ({ userId, plays }))
+      .sort((a, b) => b.plays - a.plays)
+      .slice(0, 5);
+
+    return {
+      guildId: normalizedGuildId,
+      days: safeDays,
+      playCount,
+      topTracks,
+      topRequesters,
+      generatedAt: new Date(),
+    };
+  }
+
+  async getRecapState(guildId) {
+    const normalizedGuildId = normalizeGuildId(guildId);
+    if (!this.guildRecaps) {
+      return { guildId: normalizedGuildId, lastWeeklyRecapAt: null };
+    }
+
+    const doc = await this.guildRecaps.findOne(
+      { guildId: normalizedGuildId },
+      { projection: { _id: 0 } }
+    );
+    return {
+      guildId: normalizedGuildId,
+      lastWeeklyRecapAt: doc?.lastWeeklyRecapAt ?? null,
+      updatedAt: doc?.updatedAt ?? null,
+    };
+  }
+
+  async markRecapSent(guildId, sentAt = new Date()) {
+    const normalizedGuildId = normalizeGuildId(guildId);
+    const collection = this._ensureFeatureCollection(this.guildRecaps, 'Guild recaps');
+    await collection.updateOne(
+      { guildId: normalizedGuildId },
+      {
+        $setOnInsert: {
+          guildId: normalizedGuildId,
+          createdAt: new Date(),
+        },
+        $set: {
+          lastWeeklyRecapAt: sentAt,
+          updatedAt: new Date(),
+        },
+      },
+      { upsert: true }
+    );
   }
 
   async createGuildPlaylist(guildId, name, createdBy) {

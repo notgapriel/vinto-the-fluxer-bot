@@ -1,6 +1,8 @@
 import { ValidationError } from '../../core/errors.js';
 import { registerLibraryCommands } from './libraryCommands.js';
 import { registerConfigCommands } from './configCommands.js';
+import { registerAdvancedCommands, applyMoodPreset } from './advancedCommands.js';
+import { buildEmbed } from '../messageFormatter.js';
 
 const VOICE_CHANNEL_PATTERN = /^<#(\d+)>$/;
 const ROLE_MENTION_PATTERN = /^<@&(\d+)>$/;
@@ -9,13 +11,13 @@ const HISTORY_PAGE_SIZE = 10;
 const PLAYLIST_PAGE_SIZE = 10;
 const FAVORITES_PAGE_SIZE = 10;
 const SEARCH_RESULT_DEFAULT_LIMIT = 5;
+const SUPPORT_SERVER_URL = 'https://fluxer.gg/qDoq4Tf0';
 const PERMISSION_CACHE_TTL_MS = 60_000;
 const ADMINISTRATOR_PERMISSION = 1n << 3n;
 const MANAGE_GUILD_PERMISSION = 1n << 5n;
 const playCooldowns = new Map();
 const pendingSearchSelections = new Map();
 const manageGuildPermissionCache = new Map();
-
 function parseVoiceChannelArgument(args) {
   if (!args?.length) return { channelId: null, rest: args ?? [] };
 
@@ -64,6 +66,21 @@ function formatSeconds(seconds) {
     return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function formatUptimeCompact(totalSeconds) {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const days = Math.floor(safe / 86_400);
+  const hours = Math.floor((safe % 86_400) / 3_600);
+  const minutes = Math.floor((safe % 3_600) / 60);
+  const secs = safe % 60;
+
+  const parts = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0 || parts.length) parts.push(`${hours}h`);
+  if (minutes > 0 || parts.length) parts.push(`${minutes}m`);
+  parts.push(`${secs}s`);
+  return parts.join(' ');
 }
 
 function buildProgressBar(positionSec, totalSec, size = 16) {
@@ -269,6 +286,24 @@ async function ensureConnectedSession(ctx, explicitChannelId = null) {
   return session;
 }
 
+async function applyVoiceProfileIfConfigured(ctx, session, explicitChannelId = null) {
+  if (!ctx.library?.getVoiceProfile) return;
+  const channelId = explicitChannelId ?? session?.connection?.channelId ?? null;
+  if (!channelId || !ctx.guildId) return;
+
+  const profile = await ctx.library.getVoiceProfile(ctx.guildId, channelId).catch(() => null);
+  const moodPreset = String(profile?.moodPreset ?? '').trim().toLowerCase();
+  if (!moodPreset) return;
+
+  applyMoodPreset(session.player, moodPreset);
+}
+
+async function resolveQueueGuard(ctx) {
+  if (!ctx.library?.getGuildFeatureConfig || !ctx.guildId) return null;
+  const cfg = await ctx.library.getGuildFeatureConfig(ctx.guildId).catch(() => null);
+  return cfg?.queueGuard ?? null;
+}
+
 function formatQueuePage(session, page) {
   const pending = session.player.pendingTracks;
   const current = session.player.currentTrack;
@@ -311,7 +346,7 @@ function formatQueuePage(session, page) {
 
   const pendingDurationSec = sumTrackDurationsSeconds(pending);
   return {
-    description: `Loop: **${session.player.loopMode}** • Volume: **${session.player.volumePercent}%** • Pending duration: **${formatSeconds(pendingDurationSec)}** • Autoplay: **${session.settings.autoplayEnabled ? 'on' : 'off'}** • Dedupe: **${session.settings.dedupeEnabled ? 'on' : 'off'}** • 24/7: **${session.settings.stayInVoiceEnabled ? 'on' : 'off'}**`,
+    description: `Loop: **${session.player.loopMode}** • Volume: **${session.player.volumePercent}%** • Pending duration: **${formatSeconds(pendingDurationSec)}** • Autoplay: **disabled** • Dedupe: **${session.settings.dedupeEnabled ? 'on' : 'off'}** • 24/7: **${session.settings.stayInVoiceEnabled ? 'on' : 'off'}**`,
     fields,
   };
 }
@@ -719,6 +754,11 @@ async function resolveManageGuildPermission(ctx) {
 }
 
 function userHasDjAccess(ctx, session) {
+  const handoff = session?.tempDjHandoff ?? null;
+  if (handoff && Number.isFinite(handoff.expiresAt) && handoff.expiresAt > Date.now()) {
+    return String(handoff.userId) === String(ctx.authorId);
+  }
+
   const djRoles = session.settings.djRoleIds;
   if (!djRoles || djRoles.size === 0) return true;
 
@@ -794,52 +834,38 @@ function createCommand(definition) {
   return Object.freeze(definition);
 }
 
-function chunkLines(lines, maxChunkLength = 950) {
-  const chunks = [];
-  let current = [];
-  let currentLength = 0;
+function buildHelpPages(ctx) {
+  const commands = ctx.registry.list();
+  const lines = commands.map((cmd) => {
+    const aliases = cmd.aliases?.length ? ` (aliases: ${cmd.aliases.join(', ')})` : '';
+    return `\`${ctx.prefix}${cmd.usage}\` - ${cmd.description}${aliases}`;
+  });
 
-  for (const line of lines) {
-    const lineLength = line.length + (current.length ? 1 : 0);
-    if (current.length && currentLength + lineLength > maxChunkLength) {
-      chunks.push(current);
-      current = [line];
-      currentLength = line.length;
-      continue;
-    }
+  const pageSize = 12;
+  const pages = [];
+  const totalPages = Math.max(1, Math.ceil(lines.length / pageSize));
 
-    current.push(line);
-    currentLength += lineLength;
+  for (let i = 0; i < totalPages; i += 1) {
+    const slice = lines.slice(i * pageSize, (i + 1) * pageSize);
+    const payload = {
+      embeds: [
+        buildEmbed({
+          title: `Help ${i + 1}/${totalPages}`,
+          description: slice.join('\n').slice(0, 3900),
+          footer: `Support: ${SUPPORT_SERVER_URL}`,
+        }),
+      ],
+      allowed_mentions: {
+        parse: [],
+        users: [],
+        roles: [],
+        replied_user: false,
+      },
+    };
+    pages.push(payload);
   }
 
-  if (current.length) {
-    chunks.push(current);
-  }
-
-  return chunks;
-}
-
-function commandCategory(commandName) {
-  const name = String(commandName ?? '').toLowerCase();
-
-  if (['help', 'ping', 'stats'].includes(name)) return 'Utility';
-  if (['join', 'leave'].includes(name)) return 'Voice';
-  if (['queue', 'history', 'remove', 'clear', 'shuffle'].includes(name)) return 'Queue';
-  if (['playlist', 'fav', 'favs', 'ufav', 'favplay'].includes(name)) return 'Library';
-  if ([
-    'autoplay',
-    'dedupe',
-    '247',
-    'djrole',
-    'prefix',
-    'musiclog',
-    'voteskipcfg',
-    'settings',
-  ].includes(name)) {
-    return 'Configuration';
-  }
-
-  return 'Playback';
+  return pages;
 }
 
 export function registerCommands(registry) {
@@ -849,32 +875,23 @@ export function registerCommands(registry) {
     description: 'Show all available commands.',
     usage: 'help',
     async execute(ctx) {
-      const categories = new Map();
-      for (const cmd of ctx.registry.list()) {
-        const category = commandCategory(cmd.name);
-        const aliases = cmd.aliases?.length ? ` (aliases: ${cmd.aliases.join(', ')})` : '';
-        const line = `\`${ctx.prefix}${cmd.usage}\` - ${cmd.description}${aliases}`;
-        if (!categories.has(category)) categories.set(category, []);
-        categories.get(category).push(line);
+      const pages = buildHelpPages(ctx);
+      const first = await ctx.rest.sendMessage(ctx.channelId, pages[0]);
+      const messageId = first?.id ?? first?.message?.id ?? null;
+      if (messageId && ctx.registerHelpPagination) {
+        await ctx.registerHelpPagination(ctx.channelId, messageId, pages);
       }
-
-      const order = ['Playback', 'Queue', 'Library', 'Voice', 'Configuration', 'Utility'];
-      const fields = [];
-      for (const category of order) {
-        const rows = categories.get(category);
-        if (!rows?.length) continue;
-
-        const chunks = chunkLines(rows, 950);
-        for (let i = 0; i < chunks.length; i += 1) {
-          const suffix = i === 0 ? '' : ' (more)';
-          fields.push({
-            name: `${category}${suffix}`,
-            value: chunks[i].join('\n'),
-          });
-        }
-      }
-
-      await ctx.reply.info('Commands by category', fields.slice(0, 25));
+    },
+  }));
+registry.register(createCommand({
+    name: 'support',
+    aliases: ['discord', 'server'],
+    description: 'Get the support server invite link.',
+    usage: 'support',
+    async execute(ctx) {
+      await ctx.reply.info('Support server', [
+        { name: 'Invite', value: SUPPORT_SERVER_URL },
+      ]);
     },
   }));
 
@@ -885,9 +902,10 @@ export function registerCommands(registry) {
     async execute(ctx) {
       const uptimeMs = Date.now() - ctx.startedAt;
       const mem = process.memoryUsage();
+      const uptimeSec = Math.floor(uptimeMs / 1000);
 
       await ctx.reply.success('Bot is online.', [
-        { name: 'Uptime', value: `${Math.floor(uptimeMs / 1000)}s`, inline: true },
+        { name: 'Uptime', value: formatUptimeCompact(uptimeSec), inline: true },
         { name: 'Sessions', value: String(ctx.sessions.sessions.size), inline: true },
         { name: 'Memory RSS', value: `${Math.round(mem.rss / 1024 / 1024)} MB`, inline: true },
       ]);
@@ -947,30 +965,39 @@ export function registerCommands(registry) {
       }
       enforcePlayCooldown(ctx);
 
-      await ctx.safeTyping();
-      const session = await ensureConnectedSession(ctx, explicitChannelId);
+      await ctx.withGuildOpLock('play', async () => {
+        await ctx.safeTyping();
+        const session = await ensureConnectedSession(ctx, explicitChannelId);
+        await applyVoiceProfileIfConfigured(ctx, session, explicitChannelId);
 
-      const tracks = await session.player.enqueue(query, {
-        requestedBy: ctx.authorId,
-        dedupe: session.settings.dedupeEnabled,
+        const queueGuard = await resolveQueueGuard(ctx);
+        const preview = await session.player.previewTracks(query, {
+          requestedBy: ctx.authorId,
+          limit: ctx.config.maxPlaylistTracks,
+        });
+        const tracks = preview.map((track) => session.player.createTrackFromData(track, ctx.authorId));
+        const added = session.player.enqueueResolvedTracks(tracks, {
+          dedupe: session.settings.dedupeEnabled,
+          queueGuard,
+        });
+
+        if (!added.length) {
+          await ctx.reply.warning('No tracks found for that query.');
+          return;
+        }
+
+        if (!session.player.playing) {
+          await session.player.play();
+        }
+
+        if (added.length === 1) {
+          await ctx.reply.success(`Added to queue: ${trackLabel(added[0])}`);
+        } else {
+          await ctx.reply.success(`Added **${added.length}** tracks from playlist.`, [
+            { name: 'First Track', value: trackLabel(added[0]) },
+          ]);
+        }
       });
-
-      if (!tracks.length) {
-        await ctx.reply.warning('No tracks found for that query.');
-        return;
-      }
-
-      if (!session.player.playing) {
-        await session.player.play();
-      }
-
-      if (tracks.length === 1) {
-        await ctx.reply.success(`Added to queue: ${trackLabel(tracks[0])}`);
-      } else {
-        await ctx.reply.success(`Added **${tracks.length}** tracks from playlist.`, [
-          { name: 'First Track', value: trackLabel(tracks[0]) },
-        ]);
-      }
     },
   }));
 
@@ -988,29 +1015,38 @@ export function registerCommands(registry) {
       }
       enforcePlayCooldown(ctx);
 
-      await ctx.safeTyping();
-      const session = await ensureConnectedSession(ctx);
+      await ctx.withGuildOpLock('playnext', async () => {
+        await ctx.safeTyping();
+        const session = await ensureConnectedSession(ctx);
+        await applyVoiceProfileIfConfigured(ctx, session);
+        const queueGuard = await resolveQueueGuard(ctx);
+        const preview = await session.player.previewTracks(query, {
+          requestedBy: ctx.authorId,
+          limit: ctx.config.maxPlaylistTracks,
+        });
+        const tracks = preview.map((track) => session.player.createTrackFromData(track, ctx.authorId));
+        const added = session.player.enqueueResolvedTracks(tracks, {
+          requestedBy: ctx.authorId,
+          playNext: true,
+          dedupe: session.settings.dedupeEnabled,
+          queueGuard,
+        });
 
-      const tracks = await session.player.enqueue(query, {
-        requestedBy: ctx.authorId,
-        playNext: true,
-        dedupe: session.settings.dedupeEnabled,
+        if (!added.length) {
+          await ctx.reply.warning('No tracks found for that query.');
+          return;
+        }
+
+        if (!session.player.playing) {
+          await session.player.play();
+        }
+
+        if (added.length === 1) {
+          await ctx.reply.success(`Queued next: ${trackLabel(added[0])}`);
+        } else {
+          await ctx.reply.success(`Queued **${added.length}** playlist tracks at the front.`);
+        }
       });
-
-      if (!tracks.length) {
-        await ctx.reply.warning('No tracks found for that query.');
-        return;
-      }
-
-      if (!session.player.playing) {
-        await session.player.play();
-      }
-
-      if (tracks.length === 1) {
-        await ctx.reply.success(`Queued next: ${trackLabel(tracks[0])}`);
-      } else {
-        await ctx.reply.success(`Queued **${tracks.length}** playlist tracks at the front.`);
-      }
     },
   }));
 
@@ -1027,28 +1063,30 @@ export function registerCommands(registry) {
       }
 
       enforcePlayCooldown(ctx);
-      await ctx.safeTyping();
+      await ctx.withGuildOpLock('search', async () => {
+        await ctx.safeTyping();
 
-      const session = await ensureConnectedSession(ctx);
-      const limit = Math.max(
-        1,
-        Math.min(10, Number.parseInt(String(ctx.config.searchResultLimit ?? SEARCH_RESULT_DEFAULT_LIMIT), 10) || SEARCH_RESULT_DEFAULT_LIMIT)
-      );
+        const session = await ensureConnectedSession(ctx);
+        const limit = Math.max(
+          1,
+          Math.min(10, Number.parseInt(String(ctx.config.searchResultLimit ?? SEARCH_RESULT_DEFAULT_LIMIT), 10) || SEARCH_RESULT_DEFAULT_LIMIT)
+        );
 
-      const results = await session.player.searchCandidates(query, limit, {
-        requestedBy: ctx.authorId,
+        const results = await session.player.searchCandidates(query, limit, {
+          requestedBy: ctx.authorId,
+        });
+        if (!results.length) {
+          await ctx.reply.warning('No search results found.');
+          return;
+        }
+
+        const ttlMs = saveSearchSelection(ctx, results);
+        const lines = results.map((track, idx) => `${idx + 1}. ${trackLabel(track)}`);
+        await ctx.reply.info(`Search results for **${query}**`, [
+          { name: 'Pick one', value: lines.join('\n').slice(0, 1000) },
+          { name: 'Next step', value: `Use \`${ctx.prefix}pick <1-${results.length}>\` within ${Math.ceil(ttlMs / 1000)}s.` },
+        ]);
       });
-      if (!results.length) {
-        await ctx.reply.warning('No search results found.');
-        return;
-      }
-
-      const ttlMs = saveSearchSelection(ctx, results);
-      const lines = results.map((track, idx) => `${idx + 1}. ${trackLabel(track)}`);
-      await ctx.reply.info(`Search results for **${query}**`, [
-        { name: 'Pick one', value: lines.join('\n').slice(0, 1000) },
-        { name: 'Next step', value: `Use \`${ctx.prefix}pick <1-${results.length}>\` within ${Math.ceil(ttlMs / 1000)}s.` },
-      ]);
     },
   }));
 
@@ -1071,23 +1109,28 @@ export function registerCommands(registry) {
         throw new ValidationError(`Index out of range. Choose 1-${selection.length}.`);
       }
 
-      const session = await ensureConnectedSession(ctx);
-      const track = session.player.createTrackFromData(selected, ctx.authorId);
-      const added = session.player.enqueueResolvedTracks([track], {
-        dedupe: session.settings.dedupeEnabled,
+      await ctx.withGuildOpLock('pick', async () => {
+        const session = await ensureConnectedSession(ctx);
+        await applyVoiceProfileIfConfigured(ctx, session);
+        const queueGuard = await resolveQueueGuard(ctx);
+        const track = session.player.createTrackFromData(selected, ctx.authorId);
+        const added = session.player.enqueueResolvedTracks([track], {
+          dedupe: session.settings.dedupeEnabled,
+          queueGuard,
+        });
+
+        if (!added.length) {
+          await ctx.reply.warning('Track already exists in queue (dedupe enabled).');
+          return;
+        }
+
+        if (!session.player.playing) {
+          await session.player.play();
+        }
+
+        clearSearchSelection(ctx);
+        await ctx.reply.success(`Added to queue: ${trackLabel(added[0])}`);
       });
-
-      if (!added.length) {
-        await ctx.reply.warning('Track already exists in queue (dedupe enabled).');
-        return;
-      }
-
-      if (!session.player.playing) {
-        await session.player.play();
-      }
-
-      clearSearchSelection(ctx);
-      await ctx.reply.success(`Added to queue: ${trackLabel(added[0])}`);
     },
   }));
 
@@ -1361,6 +1404,8 @@ export function registerCommands(registry) {
     normalizeIndex,
     trackLabel,
     ensureConnectedSession,
+    resolveQueueGuard,
+    applyVoiceProfileIfConfigured,
   });
 
   registry.register(createCommand({
@@ -1578,6 +1623,18 @@ export function registerCommands(registry) {
     ensureManageGuildAccess,
   });
 
+  registerAdvancedCommands(registry, {
+    createCommand,
+    ensureGuild,
+    getSessionOrThrow,
+    ensureConnectedSession,
+    ensureManageGuildAccess,
+    ensureDjAccess,
+    parseRequiredInteger,
+    parseTextChannelId,
+    requireLibrary,
+  });
+
   registry.register(createCommand({
     name: 'voteskip',
     aliases: ['vs'],
@@ -1643,7 +1700,7 @@ export function registerCommands(registry) {
         );
 
       await ctx.reply.info('Runtime statistics', [
-        { name: 'Uptime', value: `${uptimeSeconds}s`, inline: true },
+        { name: 'Uptime', value: formatUptimeCompact(uptimeSeconds), inline: true },
         { name: 'Guild sessions', value: String(ctx.sessions.sessions.size), inline: true },
         { name: 'Servers total', value: serverCountLabel, inline: true },
         { name: 'Users total', value: userCountLabel, inline: true },
@@ -1652,3 +1709,4 @@ export function registerCommands(registry) {
     },
   }));
 }
+

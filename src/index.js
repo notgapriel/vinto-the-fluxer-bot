@@ -20,6 +20,9 @@ import { initializeSentry } from './monitoring/sentry.js';
 const startedAt = Date.now();
 const config = loadConfig();
 const logger = createLogger({ level: config.logLevel, name: 'fluxer-bot' });
+
+sanitizeBrokenLocalProxyEnv(logger);
+
 const metrics = new MetricsRegistry();
 const metricsSessionsActive = metrics.gauge('sessions_active', 'Number of active guild sessions');
 const metricsGatewayConnected = metrics.gauge('gateway_connected', 'Gateway connection state (1=connected)');
@@ -81,6 +84,9 @@ const musicLibrary = new MusicLibraryStore({
   guildPlaylistsCollection: mongo.collection('guild_playlists'),
   userFavoritesCollection: mongo.collection('user_favorites'),
   guildHistoryCollection: mongo.collection('guild_history'),
+  guildFeaturesCollection: mongo.collection('guild_features'),
+  userProfilesCollection: mongo.collection('user_profiles'),
+  guildRecapsCollection: mongo.collection('guild_recaps'),
   logger: logger.child('music-library'),
   maxPlaylistsPerGuild: config.maxSavedPlaylistsPerGuild,
   maxTracksPerPlaylist: config.maxSavedTracksPerPlaylist,
@@ -191,6 +197,15 @@ gateway.on('MESSAGE_CREATE', (message) => {
       error: err instanceof Error ? err.message : String(err),
     });
     errorReporter?.captureException?.(err, { source: 'message_create_handler' });
+  });
+});
+
+gateway.on('MESSAGE_REACTION_ADD', (payload) => {
+  router.handleReactionAdd(payload).catch((err) => {
+    logger.warn('Unhandled MESSAGE_REACTION_ADD handler error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    errorReporter?.captureException?.(err, { source: 'message_reaction_add_handler' });
   });
 });
 
@@ -307,4 +322,47 @@ async function resolveGatewayUrl() {
   }
 
   return config.gatewayUrl;
+}
+
+function sanitizeBrokenLocalProxyEnv(rootLogger) {
+  const keys = [
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'ALL_PROXY',
+    'http_proxy',
+    'https_proxy',
+    'all_proxy',
+    'GIT_HTTP_PROXY',
+    'GIT_HTTPS_PROXY',
+  ];
+
+  const isBlockedLoopbackProxy = (value) => {
+    const raw = String(value ?? '').trim().toLowerCase();
+    if (!raw) return false;
+
+    try {
+      const parsed = new URL(raw);
+      const host = String(parsed.hostname ?? '').toLowerCase();
+      const port = Number.parseInt(String(parsed.port ?? ''), 10);
+      return (host === '127.0.0.1' || host === 'localhost' || host === '::1') && port === 9;
+    } catch {
+      return /127\.0\.0\.1:9|localhost:9|\[::1\]:9/.test(raw);
+    }
+  };
+
+  const removed = [];
+  for (const key of keys) {
+    const value = process.env[key];
+    if (!value) continue;
+    if (!isBlockedLoopbackProxy(value)) continue;
+    delete process.env[key];
+    removed.push(key);
+  }
+
+  if (removed.length) {
+    rootLogger.warn('Removed broken loopback proxy environment variables', {
+      removed,
+      reason: 'proxy pointed to localhost:9 and would block outbound media/API requests',
+    });
+  }
 }

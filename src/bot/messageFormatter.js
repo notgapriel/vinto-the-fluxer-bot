@@ -1,9 +1,11 @@
 const COLORS = {
-  info: 0x5865f2,
-  success: 0x57f287,
-  warning: 0xfee75c,
-  error: 0xed4245,
+  brand: 0xff2d78,
+  info: 0xff2d78,
+  success: 0xff2d78,
+  warning: 0xff2d78,
+  error: 0xff2d78,
 };
+const BOT_BRAND = 'Vinto';
 
 function isoNow() {
   return new Date().toISOString();
@@ -11,13 +13,13 @@ function isoNow() {
 
 function truncate(text, max) {
   if (text.length <= max) return text;
-  return `${text.slice(0, max - 1)}…`;
+  return `${text.slice(0, max - 3)}...`;
 }
 
 export function buildEmbed({
   title,
   description,
-  color = COLORS.info,
+  color = COLORS.brand,
   fields,
   footer,
 }) {
@@ -37,9 +39,8 @@ export function buildEmbed({
     }));
   }
 
-  if (footer) {
-    embed.footer = { text: truncate(String(footer), 2048) };
-  }
+  const footerText = footer ? `${BOT_BRAND} | ${String(footer)}` : BOT_BRAND;
+  embed.footer = { text: truncate(String(footerText), 2048) };
 
   return embed;
 }

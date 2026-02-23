@@ -1,5 +1,8 @@
 import { EventEmitter } from 'events';
 import { spawn } from 'child_process';
+import { copyFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import ffmpegPath from 'ffmpeg-static';
 import playdl from 'play-dl';
 import { Queue } from './Queue.js';
@@ -140,21 +143,62 @@ function soundCloudAuthorizationHelp() {
   return 'SoundCloud lookup needs SoundCloud authorization in play-dl. Falling back to YouTube search for this URL.';
 }
 
-function isBenignYouTubeFallbackError(err) {
-  const message = String(err?.message ?? err ?? '').toLowerCase();
-  return (
-    message.includes('invalid url')
-    || message.includes('video id')
-    || message.includes('playability')
-    || message.includes('signature')
-    || message.includes('sign in to confirm')
-    || message.includes('not a bot')
-  );
-}
-
 function isYouTubeBotCheckError(err) {
   const message = String(err?.message ?? err ?? '').toLowerCase();
   return message.includes('sign in to confirm') || message.includes('not a bot');
+}
+
+function isYtDlpModuleMissingError(err) {
+  const message = String(err?.message ?? err ?? '').toLowerCase();
+  return (
+    message.includes('no module named yt_dlp')
+    || message.includes('no module named yt-dlp')
+    || message.includes('module named yt_dlp')
+  );
+}
+
+function isConnectionRefusedError(err) {
+  const message = String(err?.message ?? err ?? '').toLowerCase();
+  return (
+    message.includes('winerror 10061')
+    || message.includes('connection refused')
+    || message.includes('zielcomputer die verbindung verweigerte')
+  );
+}
+
+function isRequestedFormatUnavailableError(err) {
+  const message = String(err?.message ?? err ?? '').toLowerCase();
+  return (
+    message.includes('requested format is not available')
+    || message.includes('format is not available')
+  );
+}
+
+function isYtDlpOutputTimeoutError(err) {
+  const message = String(err?.message ?? err ?? '').toLowerCase();
+  return message.includes('yt-dlp did not produce audio output in time');
+}
+
+function isYtDlpExitedBeforeOutputError(err) {
+  const message = String(err?.message ?? err ?? '').toLowerCase();
+  return message.includes('yt-dlp exited before output');
+}
+
+function isRetryableYtDlpStartupError(err) {
+  return (
+    isRequestedFormatUnavailableError(err)
+    || isYtDlpOutputTimeoutError(err)
+    || isYtDlpExitedBeforeOutputError(err)
+  );
+}
+
+function isPlayDlBrowseFailure(err) {
+  const message = String(err?.message ?? err ?? '').toLowerCase();
+  return (
+    message.includes('browseid')
+    || message.includes("cannot read properties of undefined (reading 'browseid')")
+    || (message.includes('cannot read properties of undefined') && message.includes('youtube'))
+  );
 }
 
 function parseCsvArgs(value) {
@@ -163,6 +207,43 @@ function parseCsvArgs(value) {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function normalizeYtDlpArgs(args) {
+  const input = Array.isArray(args) ? args : [];
+  if (!input.length) return [];
+
+  const listValueFlags = new Set([
+    '--js-runtimes',
+    '--extractor-args',
+    '--remote-components',
+  ]);
+
+  const normalized = [];
+  for (let i = 0; i < input.length; i += 1) {
+    const token = String(input[i] ?? '').trim();
+    if (!token) continue;
+
+    if (listValueFlags.has(token)) {
+      const values = [];
+      while (i + 1 < input.length) {
+        const next = String(input[i + 1] ?? '').trim();
+        if (!next || next.startsWith('--')) break;
+        values.push(next);
+        i += 1;
+      }
+
+      normalized.push(token);
+      if (values.length) {
+        normalized.push(values.join(','));
+      }
+      continue;
+    }
+
+    normalized.push(token);
+  }
+
+  return normalized;
 }
 
 function sanitizeUrlToSearchQuery(url) {
@@ -217,10 +298,14 @@ export class MusicPlayer extends EventEmitter {
     this.ytdlpBin = options.ytdlpBin || process.env.YTDLP_BIN || null;
     this.ytdlpCookiesFile = options.ytdlpCookiesFile || process.env.YTDLP_COOKIES_FILE || null;
     this.ytdlpCookiesFromBrowser = options.ytdlpCookiesFromBrowser || process.env.YTDLP_COOKIES_FROM_BROWSER || null;
-    this.ytdlpYoutubeClient = options.ytdlpYoutubeClient || process.env.YTDLP_YOUTUBE_CLIENT || null;
-    this.ytdlpExtraArgs = Array.isArray(options.ytdlpExtraArgs)
-      ? options.ytdlpExtraArgs
-      : parseCsvArgs(options.ytdlpExtraArgs || process.env.YTDLP_EXTRA_ARGS || null);
+    const configuredYtdlpClient = options.ytdlpYoutubeClient ?? process.env.YTDLP_YOUTUBE_CLIENT ?? null;
+    this.ytdlpYoutubeClient = String(configuredYtdlpClient ?? '').trim() || null;
+    const configuredYtDlpExtraArgs = options.ytdlpExtraArgs ?? process.env.YTDLP_EXTRA_ARGS ?? null;
+    const rawYtDlpExtraArgs = Array.isArray(configuredYtDlpExtraArgs)
+      ? configuredYtDlpExtraArgs
+      : parseCsvArgs(configuredYtDlpExtraArgs);
+    this.ytdlpExtraArgs = normalizeYtDlpArgs(rawYtDlpExtraArgs);
+    this._useRuntimeYtDlpCookiesFile();
 
     this.maxQueueSize = options.maxQueueSize ?? 100;
     this.maxPlaylistTracks = options.maxPlaylistTracks ?? 25;
@@ -255,6 +340,41 @@ export class MusicPlayer extends EventEmitter {
     this.pauseStartedAtMs = null;
     this.totalPausedMs = 0;
     this.currentTrackOffsetSec = 0;
+    this.autoplayBlockedUntil = new Map();
+    this.autoplayBlockMs = Math.max(60_000, Number.parseInt(String(options.autoplayBlockMs ?? 30 * 60 * 1000), 10) || 30 * 60 * 1000);
+    this.autoplayBlockMaxEntries = Math.max(20, Number.parseInt(String(options.autoplayBlockMaxEntries ?? 128), 10) || 128);
+  }
+
+  _useRuntimeYtDlpCookiesFile() {
+    if (!this.ytdlpCookiesFile || this.ytdlpCookiesFromBrowser) return;
+
+    const sourcePath = String(this.ytdlpCookiesFile).trim();
+    if (!sourcePath) return;
+
+    if (!existsSync(sourcePath)) {
+      this.logger?.warn?.('Configured yt-dlp cookies file not found', {
+        path: sourcePath,
+      });
+      return;
+    }
+
+    const runtimePath = join(
+      tmpdir(),
+      `${basename(sourcePath)}.runtime-${process.pid}-${Math.random().toString(36).slice(2, 10)}`
+    );
+    try {
+      copyFileSync(sourcePath, runtimePath);
+      this.ytdlpCookiesFile = runtimePath;
+      this.logger?.info?.('Using runtime copy of yt-dlp cookies file to avoid mutating source cookies', {
+        sourcePath,
+        runtimePath,
+      });
+    } catch (err) {
+      this.logger?.warn?.('Failed to prepare runtime yt-dlp cookies file copy, using source file directly', {
+        sourcePath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   get currentTrack() {
@@ -410,8 +530,9 @@ export class MusicPlayer extends EventEmitter {
   refreshCurrentTrackProcessing() {
     if (!this.playing || !this.currentTrack) return false;
 
-    const restartFrom = this.canSeekCurrentTrack() ? this.getProgressSeconds() : 0;
-    this.pendingSeekTrack = this._cloneTrack(this.currentTrack, { seekStartSec: restartFrom });
+    // Mid-track seek restarts are significantly more likely to trigger YouTube challenge failures.
+    // For effect reprocessing, prefer a clean restart from 0 for stability.
+    this.pendingSeekTrack = this._cloneTrack(this.currentTrack, { seekStartSec: 0 });
     this.skipRequested = true;
     this._cleanupProcesses();
     return true;
@@ -438,6 +559,8 @@ export class MusicPlayer extends EventEmitter {
   }
 
   async enqueueAutoplayTrack() {
+    this._pruneAutoplayBlocked();
+
     const seed = this.currentTrack ?? this.getLastHistoryTrack();
     if (!seed) return null;
 
@@ -458,6 +581,7 @@ export class MusicPlayer extends EventEmitter {
         source: 'autoplay',
       });
 
+      if (this._isAutoplayBlocked(candidate)) continue;
       if (this._hasDuplicateTrack(candidate)) continue;
       if (seed.url && candidate.url === seed.url) continue;
 
@@ -512,6 +636,9 @@ export class MusicPlayer extends EventEmitter {
   enqueueResolvedTracks(tracks, options = {}) {
     const playNext = Boolean(options.playNext);
     const dedupe = Boolean(options.dedupe);
+    const queueGuard = options.queueGuard && typeof options.queueGuard === 'object'
+      ? options.queueGuard
+      : null;
     const input = Array.isArray(tracks) ? tracks : [];
     if (!input.length) return [];
 
@@ -521,6 +648,10 @@ export class MusicPlayer extends EventEmitter {
 
     if (!filteredTracks.length) {
       return [];
+    }
+
+    if (queueGuard?.enabled) {
+      this._enforceQueueGuard(filteredTracks, queueGuard);
     }
 
     if (this.queue.pendingSize + filteredTracks.length > this.maxQueueSize) {
@@ -539,6 +670,60 @@ export class MusicPlayer extends EventEmitter {
 
     this.emit('tracksAdded', filteredTracks);
     return filteredTracks;
+  }
+
+  _enforceQueueGuard(newTracks, guard) {
+    const pending = this.pendingTracks;
+    const windowSize = Math.max(1, Math.min(200, Number.parseInt(String(guard.windowSize ?? 25), 10) || 25));
+    const maxPerRequesterWindow = Math.max(1, Math.min(50, Number.parseInt(String(guard.maxPerRequesterWindow ?? 5), 10) || 5));
+    const maxArtistStreak = Math.max(1, Math.min(20, Number.parseInt(String(guard.maxArtistStreak ?? 3), 10) || 3));
+
+    const queueWindow = pending.slice(-windowSize);
+    const requesterCounts = new Map();
+    for (const track of queueWindow) {
+      const requester = String(track?.requestedBy ?? '').trim();
+      if (!requester) continue;
+      requesterCounts.set(requester, (requesterCounts.get(requester) ?? 0) + 1);
+    }
+
+    for (const track of newTracks) {
+      const requester = String(track?.requestedBy ?? '').trim();
+      if (!requester) continue;
+      const nextCount = (requesterCounts.get(requester) ?? 0) + 1;
+      if (nextCount > maxPerRequesterWindow) {
+        throw new ValidationError(
+          `Queue guard: requester limit reached (${maxPerRequesterWindow} tracks per ${windowSize} queue items).`
+        );
+      }
+      requesterCounts.set(requester, nextCount);
+    }
+
+    const artistQueue = [...pending, ...newTracks].map((track) => this._trackArtistKey(track)).filter(Boolean);
+    let streak = 1;
+    for (let i = 1; i < artistQueue.length; i += 1) {
+      if (artistQueue[i] === artistQueue[i - 1]) {
+        streak += 1;
+      } else {
+        streak = 1;
+      }
+      if (streak > maxArtistStreak) {
+        throw new ValidationError(
+          `Queue guard: max artist streak exceeded (${maxArtistStreak}). Mix in a different artist.`
+        );
+      }
+    }
+  }
+
+  _trackArtistKey(track) {
+    const explicit = String(track?.artist ?? '').trim().toLowerCase();
+    if (explicit) return explicit;
+
+    const title = String(track?.title ?? '').trim().toLowerCase();
+    if (!title) return null;
+    if (title.includes(' - ')) {
+      return title.split(' - ')[0].trim();
+    }
+    return title.split(' ').slice(0, 2).join(' ').trim();
   }
 
   async play() {
@@ -573,6 +758,9 @@ export class MusicPlayer extends EventEmitter {
       });
     } catch (err) {
       const normalized = this._normalizePlaybackError(err);
+      if (track?.source === 'autoplay') {
+        this._markAutoplayFailure(track);
+      }
       this.emit('trackError', { track, error: normalized });
       this.logger?.error?.('Playback setup failed', { track: track.title, error: normalized.message });
 
@@ -593,9 +781,7 @@ export class MusicPlayer extends EventEmitter {
 
   pause() {
     if (!this.playing || this.paused) return false;
-
-    this.sourceProc?.kill('SIGSTOP');
-    this.ffmpeg?.kill('SIGSTOP');
+    if (!this._setPipelinePaused(true)) return false;
 
     this.paused = true;
     this.pauseStartedAtMs = Date.now();
@@ -604,9 +790,7 @@ export class MusicPlayer extends EventEmitter {
 
   resume() {
     if (!this.playing || !this.paused) return false;
-
-    this.sourceProc?.kill('SIGCONT');
-    this.ffmpeg?.kill('SIGCONT');
+    if (!this._setPipelinePaused(false)) return false;
 
     if (this.pauseStartedAtMs) {
       this.totalPausedMs += Date.now() - this.pauseStartedAtMs;
@@ -615,6 +799,51 @@ export class MusicPlayer extends EventEmitter {
     this.pauseStartedAtMs = null;
     this.paused = false;
     return true;
+  }
+
+  _setPipelinePaused(paused) {
+    const shouldPause = Boolean(paused);
+    const signal = shouldPause ? 'SIGSTOP' : 'SIGCONT';
+    const streamMethod = shouldPause ? 'pause' : 'resume';
+    const voiceMethod = shouldPause ? 'pauseAudio' : 'resumeAudio';
+    let changed = false;
+
+    const applyVoicePause = this.voice?.[voiceMethod];
+    if (typeof applyVoicePause === 'function') {
+      try {
+        changed = Boolean(applyVoicePause.call(this.voice)) || changed;
+      } catch {
+        // ignore voice pause/resume errors
+      }
+    }
+
+    if (process.platform !== 'win32') {
+      for (const proc of [this.sourceProc, this.ffmpeg]) {
+        if (!proc?.kill) continue;
+        try {
+          proc.kill(signal);
+          changed = true;
+        } catch (err) {
+          this.logger?.debug?.('Process signal pause/resume failed; falling back to stream controls', {
+            signal,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    for (const stream of [this.sourceStream, this.sourceProc?.stdout, this.ffmpeg?.stdout]) {
+      const method = stream?.[streamMethod];
+      if (typeof method !== 'function') continue;
+      try {
+        method.call(stream);
+        changed = true;
+      } catch {
+        // ignore stream pause/resume errors
+      }
+    }
+
+    return changed;
   }
 
   skip() {
@@ -735,13 +964,20 @@ export class MusicPlayer extends EventEmitter {
       throw new ValidationError('YouTube playback is currently disabled by bot configuration.');
     }
 
-    const result = await playdl.search(query, { source: { youtube: 'video' }, limit: 1 });
+    const result = await playdl.search(query, { source: { youtube: 'video' }, limit: 1 }).catch(async (err) => {
+      if (!isPlayDlBrowseFailure(err)) throw err;
+      this.logger?.warn?.('play-dl search failed, trying yt-dlp search fallback', {
+        query,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return this._searchWithYtDlp(query, 1);
+    });
     if (!result.length) return [];
 
     return [this._buildTrack({
       title: result[0].title,
       url: result[0].url,
-      duration: result[0].durationRaw,
+      duration: result[0].durationRaw ?? result[0].duration,
       requestedBy,
       source: 'youtube-search',
     })];
@@ -757,11 +993,19 @@ export class MusicPlayer extends EventEmitter {
 
     const requestedBy = options.requestedBy ?? null;
     const safeLimit = Math.max(1, Math.min(10, Number.parseInt(String(limit), 10) || 5));
-    const results = await playdl.search(query, { source: { youtube: 'video' }, limit: safeLimit });
+    const results = await playdl.search(query, { source: { youtube: 'video' }, limit: safeLimit }).catch(async (err) => {
+      if (!isPlayDlBrowseFailure(err)) throw err;
+      this.logger?.warn?.('play-dl searchCandidates failed, trying yt-dlp search fallback', {
+        query,
+        limit: safeLimit,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return this._searchWithYtDlp(query, safeLimit);
+    });
     return results.map((item) => this._buildTrack({
       title: item.title,
       url: item.url,
-      duration: item.durationRaw,
+      duration: item.durationRaw ?? item.duration,
       requestedBy,
       source: 'youtube-search',
     }));
@@ -817,7 +1061,17 @@ export class MusicPlayer extends EventEmitter {
       throw new ValidationError('YouTube playback is currently disabled by bot configuration.');
     }
 
-    const playlist = await playdl.playlist_info(url, { incomplete: true });
+    let playlist;
+    try {
+      playlist = await playdl.playlist_info(url, { incomplete: true });
+    } catch (err) {
+      if (!isPlayDlBrowseFailure(err)) throw err;
+      this.logger?.warn?.('play-dl playlist lookup failed, falling back to single URL resolution', {
+        url,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return this._resolveSingleUrlTrack(url, requestedBy);
+    }
     await playlist.fetch(this.maxPlaylistTracks);
 
     const videos = [];
@@ -1097,7 +1351,7 @@ export class MusicPlayer extends EventEmitter {
     return trimmed;
   }
 
-  _buildTrack({ title, url, duration, requestedBy, source, seekStartSec = 0 }) {
+  _buildTrack({ title, url, duration, requestedBy, source, artist = null, seekStartSec = 0 }) {
     return {
       id: buildTrackId(),
       title: title || 'Unknown title',
@@ -1105,6 +1359,7 @@ export class MusicPlayer extends EventEmitter {
       duration: toDurationLabel(duration),
       requestedBy,
       source,
+      artist: artist ? String(artist).slice(0, 128) : null,
       queuedAt: Date.now(),
       seekStartSec: Math.max(0, Number.parseInt(String(seekStartSec), 10) || 0),
     };
@@ -1134,6 +1389,41 @@ export class MusicPlayer extends EventEmitter {
 
     if (this._trackKey(this.currentTrack) === key) return true;
     return this.pendingTracks.some((track) => this._trackKey(track) === key);
+  }
+
+  _isAutoplayBlocked(track) {
+    const key = this._trackKey(track);
+    if (!key) return false;
+    const expiresAt = this.autoplayBlockedUntil.get(key);
+    if (!expiresAt) return false;
+    if (expiresAt <= Date.now()) {
+      this.autoplayBlockedUntil.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  _markAutoplayFailure(track) {
+    const key = this._trackKey(track);
+    if (!key) return;
+
+    const expiresAt = Date.now() + this.autoplayBlockMs;
+    this.autoplayBlockedUntil.set(key, expiresAt);
+    while (this.autoplayBlockedUntil.size > this.autoplayBlockMaxEntries) {
+      const oldestKey = this.autoplayBlockedUntil.keys().next().value;
+      if (!oldestKey) break;
+      this.autoplayBlockedUntil.delete(oldestKey);
+    }
+  }
+
+  _pruneAutoplayBlocked() {
+    if (!this.autoplayBlockedUntil.size) return;
+    const now = Date.now();
+    for (const [key, expiresAt] of this.autoplayBlockedUntil.entries()) {
+      if (expiresAt <= now) {
+        this.autoplayBlockedUntil.delete(key);
+      }
+    }
   }
 
   _rememberTrack(track) {
@@ -1197,23 +1487,48 @@ export class MusicPlayer extends EventEmitter {
       throw new ValidationError('YouTube playback is currently disabled by bot configuration.');
     }
 
-    try {
-      await this._startPlayDlPipeline(url, seekSec);
-      return;
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      const logFn = isBenignYouTubeFallbackError(err) ? 'debug' : 'warn';
-      this.logger?.[logFn]?.('play-dl youtube pipeline failed, trying yt-dlp fallback', {
-        error: errorMessage,
-        seekSec,
-      });
-    }
-
     await this._startYtDlpPipeline(url, seekSec);
   }
 
   async _startYtDlpPipeline(url, seekSec = 0) {
-    this.sourceProc = await this._spawnYtDlp(url);
+    const attempts = this.ytdlpYoutubeClient
+      ? [
+          { format: 'bestaudio/best', includeClientArg: true },
+          { format: 'best', includeClientArg: true },
+          { format: 'bestaudio/best', includeClientArg: false },
+          { format: 'best', includeClientArg: false },
+          { format: null, includeClientArg: false },
+        ]
+      : [
+          { format: 'bestaudio/best', includeClientArg: false },
+          { format: 'best', includeClientArg: false },
+          { format: null, includeClientArg: false },
+        ];
+
+    let lastErr = null;
+    for (const attempt of attempts) {
+      try {
+        await this._startYtDlpPipelineWithFormat(url, seekSec, attempt.format, attempt.includeClientArg);
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (!isRetryableYtDlpStartupError(err)) {
+          throw err;
+        }
+
+        this.logger?.warn?.('yt-dlp startup strategy failed, retrying with next strategy', {
+          format: attempt.format ?? '(default)',
+          includeClientArg: attempt.includeClientArg,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    throw lastErr ?? new Error('yt-dlp format selection failed');
+  }
+
+  async _startYtDlpPipelineWithFormat(url, seekSec = 0, formatSelector = 'bestaudio/best', includeClientArg = true) {
+    this.sourceProc = await this._spawnYtDlp(url, formatSelector, includeClientArg);
     this.sourceProc.stderr?.setEncoding?.('utf8');
 
     let stderr = '';
@@ -1238,8 +1553,8 @@ export class MusicPlayer extends EventEmitter {
 
     try {
       const waitTimeoutMs = seekSec > 0
-        ? Math.min(30_000, 6_000 + (Math.max(0, Number.parseInt(String(seekSec), 10) || 0) * 50))
-        : 6_000;
+        ? Math.min(45_000, 10_000 + (Math.max(0, Number.parseInt(String(seekSec), 10) || 0) * 50))
+        : 10_000;
       await this._awaitProcessOutput(this.sourceProc, waitTimeoutMs);
     } catch (err) {
       if (stderr.trim()) {
@@ -1305,7 +1620,7 @@ export class MusicPlayer extends EventEmitter {
     return filters.join(',');
   }
 
-  async _spawnYtDlp(url) {
+  async _spawnYtDlp(url, formatSelector = 'bestaudio/best', includeClientArg = true) {
     const commonArgs = [
       '--ignore-config',
       '--no-playlist',
@@ -1315,10 +1630,13 @@ export class MusicPlayer extends EventEmitter {
       '--extractor-retries', '3',
       '--fragment-retries', '3',
       '--retry-sleep', 'fragment:1:3',
-      '-f', 'bestaudio/best',
     ];
 
-    if (this.ytdlpYoutubeClient) {
+    if (formatSelector) {
+      commonArgs.push('-f', formatSelector);
+    }
+
+    if (includeClientArg && this.ytdlpYoutubeClient) {
       commonArgs.push('--extractor-args', `youtube:player_client=${this.ytdlpYoutubeClient}`);
     }
     if (this.ytdlpCookiesFile) {
@@ -1341,6 +1659,7 @@ export class MusicPlayer extends EventEmitter {
     candidates.push(
       ['yt-dlp', commonArgs],
       ['yt_dlp', commonArgs],
+      ['python', ['-m', 'yt_dlp', ...commonArgs]],
       ['python3', ['-m', 'yt_dlp', ...commonArgs]]
     );
 
@@ -1358,6 +1677,137 @@ export class MusicPlayer extends EventEmitter {
     }
 
     throw new Error(`yt-dlp not found (${lastErr?.message ?? 'command not available'})`);
+  }
+
+  async _searchWithYtDlp(query, limit = 1) {
+    const safeLimit = Math.max(1, Math.min(10, Number.parseInt(String(limit), 10) || 1));
+    const searchExpr = `ytsearch${safeLimit}:${query}`;
+    const commonArgs = [
+      '--ignore-config',
+      '--quiet',
+      '--no-warnings',
+      '--skip-download',
+      '--dump-single-json',
+    ];
+
+    if (this.ytdlpYoutubeClient) {
+      commonArgs.push('--extractor-args', `youtube:player_client=${this.ytdlpYoutubeClient}`);
+    }
+    if (this.ytdlpCookiesFile) {
+      commonArgs.push('--cookies', this.ytdlpCookiesFile);
+    }
+    if (this.ytdlpCookiesFromBrowser) {
+      commonArgs.push('--cookies-from-browser', this.ytdlpCookiesFromBrowser);
+    }
+
+    commonArgs.push(searchExpr);
+    const { stdout } = await this._runYtDlpCommand(commonArgs, 15_000);
+
+    if (!stdout?.trim()) return [];
+    let payload;
+    try {
+      payload = JSON.parse(stdout);
+    } catch {
+      return [];
+    }
+
+    const entries = Array.isArray(payload?.entries)
+      ? payload.entries
+      : (payload ? [payload] : []);
+
+    return entries
+      .map((entry) => {
+        const id = String(entry?.id ?? '').trim();
+        const url = String(entry?.webpage_url ?? entry?.url ?? '').trim() || (id ? `https://www.youtube.com/watch?v=${id}` : null);
+        const title = String(entry?.title ?? '').trim();
+        if (!url || !title) return null;
+        return {
+          title,
+          url,
+          duration: entry?.duration ?? null,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  async _runYtDlpCommand(args, timeoutMs = 12_000) {
+    const candidates = [];
+    if (this.ytdlpBin) candidates.push(this.ytdlpBin);
+    candidates.push('yt-dlp', 'yt_dlp', 'python', 'python3');
+
+    let lastErr = null;
+    for (const cmd of candidates) {
+      let proc;
+      try {
+        if (cmd === 'python3' || cmd === 'python') {
+          proc = await this._spawnProcess(cmd, ['-m', 'yt_dlp', ...args], {
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+        } else {
+          proc = await this._spawnProcess(cmd, args, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+        }
+      } catch (err) {
+        if (err?.code === 'ENOENT') {
+          lastErr = err;
+          continue;
+        }
+        throw err;
+      }
+
+      const output = await this._collectProcessOutput(proc, timeoutMs).catch((err) => {
+        throw err;
+      });
+      if (output.code === 0) return output;
+
+      lastErr = new Error(output.stderr?.trim() || `yt-dlp exited with code ${output.code}`);
+    }
+
+    throw lastErr ?? new Error('yt-dlp command failed');
+  }
+
+  _collectProcessOutput(proc, timeoutMs = 12_000) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let stdout = '';
+      let stderr = '';
+
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        proc.kill('SIGKILL');
+        reject(new Error('yt-dlp metadata command timed out.'));
+      }, timeoutMs);
+
+      proc.stdout?.setEncoding?.('utf8');
+      proc.stderr?.setEncoding?.('utf8');
+      proc.stdout?.on?.('data', (chunk) => {
+        stdout = `${stdout}${chunk}`.slice(-2_000_000);
+      });
+      proc.stderr?.on?.('data', (chunk) => {
+        stderr = `${stderr}${chunk}`.slice(-8_192);
+      });
+
+      proc.once('error', (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      });
+
+      proc.once('close', (code, signal) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        const exitCode = Number.isFinite(code) ? code : 1;
+        if (signal) {
+          reject(new Error(`yt-dlp metadata command terminated by signal ${signal}.`));
+          return;
+        }
+        resolve({ code: exitCode, stdout, stderr });
+      });
+    });
   }
 
   _awaitProcessOutput(proc, timeoutMs = 5_000) {
@@ -1527,6 +1977,12 @@ export class MusicPlayer extends EventEmitter {
     }
     if (err?.code === 'ENOENT' && /yt[_-]?dlp/i.test(String(err?.path ?? ''))) {
       return new Error('yt-dlp is not available. Install yt-dlp or set YTDLP_BIN.');
+    }
+    if (isYtDlpModuleMissingError(err)) {
+      return new Error('yt-dlp Python module is missing. Install it with `python -m pip install yt-dlp` or set YTDLP_BIN to yt-dlp.exe.');
+    }
+    if (isConnectionRefusedError(err)) {
+      return new Error('Network connection refused during media fetch. Check proxy env vars (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY) and remove localhost:9 mappings.');
     }
     if (isYouTubeBotCheckError(err)) {
       return new Error(

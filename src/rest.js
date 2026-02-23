@@ -86,6 +86,18 @@ function normalizeMessagePayload(payload) {
   return body;
 }
 
+function normalizeMessageEditPayload(payload) {
+  if (typeof payload === 'string') {
+    return { content: payload };
+  }
+
+  const body = { ...(payload ?? {}) };
+  if (!Object.prototype.hasOwnProperty.call(body, 'content') && !Array.isArray(body.embeds)) {
+    throw new Error('Message edit payload must include content or embeds.');
+  }
+  return body;
+}
+
 export class RestClient {
   constructor(options) {
     this.base = options.base;
@@ -271,6 +283,10 @@ export class RestClient {
         err.status === 400 &&
         Array.isArray(body.embeds)
       ) {
+        this.logger?.warn?.('Embed payload rejected by API, falling back to plain content', {
+          channelId,
+          error: err.message,
+        });
         const fallbackContent = body.content || body.embeds[0]?.description || body.embeds[0]?.title || 'Message';
         return this.request('POST', `/channels/${channelId}/messages`, {
           body: {
@@ -283,6 +299,28 @@ export class RestClient {
 
       throw err;
     }
+  }
+
+  async editMessage(channelId, messageId, payload) {
+    const body = normalizeMessageEditPayload(payload);
+    return this.request('PATCH', `/channels/${channelId}/messages/${messageId}`, {
+      body,
+      retryUnsafe: false,
+    });
+  }
+
+  async addReactionToMessage(channelId, messageId, emoji) {
+    const encoded = encodeURIComponent(String(emoji ?? '').trim());
+    return this.request('PUT', `/channels/${channelId}/messages/${messageId}/reactions/${encoded}/@me`, {
+      retryUnsafe: false,
+    });
+  }
+
+  async removeOwnReactionFromMessage(channelId, messageId, emoji) {
+    const encoded = encodeURIComponent(String(emoji ?? '').trim());
+    return this.request('DELETE', `/channels/${channelId}/messages/${messageId}/reactions/${encoded}/@me`, {
+      retryUnsafe: false,
+    });
   }
 }
 

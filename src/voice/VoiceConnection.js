@@ -31,6 +31,8 @@ export class VoiceConnection {
 
     this.currentAudioStream = null;
     this.audioPumpToken = 0;
+    this.playbackPaused = false;
+    this.pauseWaiters = [];
   }
 
   get connected() {
@@ -159,6 +161,8 @@ export class VoiceConnection {
 
   _stopAudioPump() {
     this.audioPumpToken += 1;
+    this.playbackPaused = false;
+    this._flushPauseWaiters();
 
     if (this.currentAudioStream?.destroy) {
       try {
@@ -175,6 +179,41 @@ export class VoiceConnection {
     } catch {
       // ignore queue clear errors
     }
+  }
+
+  pauseAudio() {
+    if (this.playbackPaused) return false;
+    this.playbackPaused = true;
+    return true;
+  }
+
+  resumeAudio() {
+    if (!this.playbackPaused) return false;
+    this.playbackPaused = false;
+    this._flushPauseWaiters();
+    return true;
+  }
+
+  _flushPauseWaiters() {
+    if (!this.pauseWaiters.length) return;
+    const waiters = this.pauseWaiters.splice(0, this.pauseWaiters.length);
+    for (const resume of waiters) {
+      try {
+        resume();
+      } catch {
+        // ignore waiter completion errors
+      }
+    }
+  }
+
+  _waitWhilePaused(token) {
+    if (!this.playbackPaused || token !== this.audioPumpToken) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      this.pauseWaiters.push(resolve);
+    });
   }
 
   _isExpectedPumpError(err, token) {
@@ -199,6 +238,8 @@ export class VoiceConnection {
     try {
       for await (const chunk of stream) {
         if (token !== this.audioPumpToken) break;
+        await this._waitWhilePaused(token);
+        if (token !== this.audioPumpToken) break;
 
         const asBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         if (!asBuffer.length) continue;
@@ -206,6 +247,9 @@ export class VoiceConnection {
         pending = pending.length ? Buffer.concat([pending, asBuffer]) : asBuffer;
 
         while (pending.length >= BYTES_PER_FRAME && token === this.audioPumpToken) {
+          await this._waitWhilePaused(token);
+          if (token !== this.audioPumpToken) break;
+
           const frameBytes = pending.subarray(0, BYTES_PER_FRAME);
           pending = pending.subarray(BYTES_PER_FRAME);
 
