@@ -5,7 +5,6 @@ import {
   SUPPORT_SERVER_URL,
   createCommand,
   buildHelpPages,
-  formatUptimeCompact,
   parseVoiceChannelArgument,
   ensureGuild,
   ensureConnectedSession,
@@ -30,6 +29,33 @@ import {
   formatHistoryPage,
   requireLibrary,
 } from './commandHelpers.js';
+
+function resolveGatewayLatencyMs(gateway) {
+  if (!gateway) return null;
+
+  if (typeof gateway.getHeartbeatLatencyMs === 'function') {
+    const fromMethod = gateway.getHeartbeatLatencyMs();
+    if (Number.isFinite(fromMethod) && fromMethod >= 0) {
+      return Math.round(fromMethod);
+    }
+  }
+
+  const fromProperty = gateway.heartbeatLatencyMs;
+  if (Number.isFinite(fromProperty) && fromProperty >= 0) {
+    return Math.round(fromProperty);
+  }
+
+  return null;
+}
+
+function buildPingPayload(ctx, fields) {
+  if (ctx.config?.enableEmbeds === false) {
+    const lines = fields.map((field) => `${field.name}: ${field.value}`);
+    return { content: ['Pong.', ...lines].join('\n') };
+  }
+
+  return { embeds: [{ title: 'Pong', fields }] };
+}
 
 export function registerCorePlaybackCommands(registry) {
   registry.register(createCommand({
@@ -60,18 +86,48 @@ registry.register(createCommand({
 
   registry.register(createCommand({
     name: 'ping',
-    description: 'Show basic bot health.',
+    description: 'Show current latency.',
     usage: 'ping',
     async execute(ctx) {
-      const uptimeMs = Date.now() - ctx.startedAt;
-      const mem = process.memoryUsage();
-      const uptimeSec = Math.floor(uptimeMs / 1000);
+      const canProbe =
+        Boolean(ctx.channelId)
+        && typeof ctx.rest?.sendMessage === 'function'
+        && typeof ctx.rest?.editMessage === 'function';
 
-      await ctx.reply.success('Bot is online.', [
-        { name: 'Uptime', value: formatUptimeCompact(uptimeSec), inline: true },
-        { name: 'Sessions', value: String(ctx.sessions.sessions.size), inline: true },
-        { name: 'Memory RSS', value: `${Math.round(mem.rss / 1024 / 1024)} MB`, inline: true },
-      ]);
+      let probeMessage = null;
+      let restLatencyMs = null;
+      if (canProbe) {
+        const probeStartedAt = Date.now();
+        probeMessage = await ctx.rest.sendMessage(ctx.channelId, { content: 'Pinging...' });
+        restLatencyMs = Math.max(0, Date.now() - probeStartedAt);
+      }
+
+      const gatewayLatencyMs = resolveGatewayLatencyMs(ctx.gateway);
+      let measuredGatewayLatencyMs = gatewayLatencyMs;
+      if (measuredGatewayLatencyMs == null && typeof ctx.gateway?.sampleHeartbeatLatency === 'function') {
+        measuredGatewayLatencyMs = await ctx.gateway.sampleHeartbeatLatency(4_000);
+      }
+      const fields = [
+        { name: 'REST Latency', value: restLatencyMs == null ? 'n/a' : `${restLatencyMs} ms`, inline: true },
+        {
+          name: 'Gateway Latency',
+          value: measuredGatewayLatencyMs == null ? 'n/a (gateway not ready)' : `${Math.round(measuredGatewayLatencyMs)} ms`,
+          inline: true,
+        },
+      ];
+      const payload = buildPingPayload(ctx, fields);
+      const messageId = probeMessage?.id ?? probeMessage?.message?.id ?? null;
+
+      if (messageId) {
+        try {
+          await ctx.rest.editMessage(ctx.channelId, messageId, payload);
+          return;
+        } catch {
+          // Fall back to a new message if editing fails.
+        }
+      }
+
+      await ctx.reply.success('Pong.', fields);
     },
   }));
 

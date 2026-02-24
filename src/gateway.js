@@ -57,8 +57,47 @@ export class Gateway extends EventEmitter {
     this.sessionId = null;
 
     this.awaitingHeartbeatAck = false;
+    this.lastHeartbeatSentAt = null;
+    this.heartbeatLatencyMs = null;
     this.reconnectAttempts = 0;
     this.manualDisconnect = false;
+  }
+
+  getHeartbeatLatencyMs() {
+    return Number.isFinite(this.heartbeatLatencyMs) ? this.heartbeatLatencyMs : null;
+  }
+
+  async sampleHeartbeatLatency(timeoutMs = 4_000) {
+    const socket = this.ws;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return null;
+    }
+
+    return new Promise((resolve) => {
+      let settled = false;
+
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutHandle);
+        this.off('heartbeat_ack', onAck);
+        resolve(value);
+      };
+
+      const onAck = (payload) => {
+        const latency = Number.isFinite(payload?.latencyMs)
+          ? payload.latencyMs
+          : this.getHeartbeatLatencyMs();
+        finish(latency);
+      };
+
+      const timeoutHandle = setTimeout(() => {
+        finish(this.getHeartbeatLatencyMs());
+      }, Math.max(250, Number.parseInt(String(timeoutMs), 10) || 4_000));
+
+      this.on('heartbeat_ack', onAck);
+      this._sendHeartbeat();
+    });
   }
 
   connect() {
@@ -186,6 +225,10 @@ export class Gateway extends EventEmitter {
         break;
 
       case Op.HEARTBEAT_ACK:
+        if (Number.isFinite(this.lastHeartbeatSentAt)) {
+          this.heartbeatLatencyMs = Math.max(0, Date.now() - this.lastHeartbeatSentAt);
+        }
+        this.emit('heartbeat_ack', { latencyMs: this.heartbeatLatencyMs });
         this.awaitingHeartbeatAck = false;
         break;
 
@@ -275,6 +318,7 @@ export class Gateway extends EventEmitter {
   }
 
   _sendHeartbeat() {
+    this.lastHeartbeatSentAt = Date.now();
     this.awaitingHeartbeatAck = true;
     this._send(Op.HEARTBEAT, this.sequence);
   }
