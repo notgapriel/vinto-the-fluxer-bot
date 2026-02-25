@@ -1,0 +1,71 @@
+name: Bug report
+description: Report a reproducible defect in runtime behavior.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this issue. Please provide enough detail to reproduce and debug quickly.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One-sentence description of the problem.
+      placeholder: Playback stops after the first track when queue has more items
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps, commands, and inputs.
+      placeholder: |
+        1. Start bot with ...
+        2. Run `!play ...`
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or stack trace
+      description: Paste relevant logs and redact secrets.
+      render: shell
+  - type: input
+    id: node_version
+    attributes:
+      label: Node.js version
+      placeholder: 20.11.1
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Ubuntu 24.04 / Windows 11 / macOS 15
+    validations:
+      required: true
+  - type: textarea
+    id: config_flags
+    attributes:
+      label: Relevant configuration
+      description: List related `.env` flags (never include tokens or secrets).
+      placeholder: |
+        ENABLE_YT_PLAYBACK=1
+        ENABLE_SPOTIFY_IMPORT=1
+        STRICT_MEDIA_AUTH=0
+

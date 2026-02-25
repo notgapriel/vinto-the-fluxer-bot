@@ -10,26 +10,43 @@ function setup() {
   return { registry, help: registry.resolve('help') };
 }
 
-test('help command groups output by categories', async () => {
+test('help command sends paginated embed payload', async () => {
   const { registry, help } = setup();
-  let payload = null;
+  let sentChannelId = null;
+  let sentPayload = null;
+  let registeredPagination = null;
 
   await help.execute({
     prefix: '!',
     registry,
-    reply: {
-      async info(text, fields) {
-        payload = { text, fields };
+    channelId: 'channel-1',
+    rest: {
+      async sendMessage(channelId, payload) {
+        sentChannelId = channelId;
+        sentPayload = payload;
+        return { id: 'message-1' };
       },
+    },
+    async registerHelpPagination(channelId, messageId, pages) {
+      registeredPagination = { channelId, messageId, pages };
     },
   });
 
-  assert.equal(payload.text, 'Commands by category');
-  assert.ok(Array.isArray(payload.fields));
-  assert.ok(payload.fields.length > 0);
+  assert.equal(sentChannelId, 'channel-1');
+  assert.ok(sentPayload);
+  assert.ok(Array.isArray(sentPayload.embeds));
+  assert.ok(sentPayload.embeds.length > 0);
+  assert.match(sentPayload.embeds[0].title, /^Help \d+\/\d+$/);
+  assert.equal(typeof sentPayload.embeds[0].description, 'string');
+  assert.ok(sentPayload.embeds[0].description.length > 0);
 
-  const names = payload.fields.map((field) => field.name);
-  assert.ok(names.some((name) => name.startsWith('Playback')));
-  assert.ok(names.some((name) => name.startsWith('Configuration')));
-  assert.equal(names.some((name) => name.startsWith('Available')), false);
+  assert.ok(registeredPagination);
+  assert.equal(registeredPagination.channelId, 'channel-1');
+  assert.equal(registeredPagination.messageId, 'message-1');
+  assert.ok(Array.isArray(registeredPagination.pages));
+  assert.ok(registeredPagination.pages.length > 0);
+  const combinedDescriptions = registeredPagination.pages
+    .map((page) => page?.embeds?.[0]?.description ?? '')
+    .join('\n');
+  assert.match(combinedDescriptions, /`!help`/);
 });

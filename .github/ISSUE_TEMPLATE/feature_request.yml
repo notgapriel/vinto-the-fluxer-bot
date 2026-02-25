@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose an improvement or new capability.
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What limitation are you hitting today?
+      placeholder: It is hard to ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior you want.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds or other options you evaluated.
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and impact
+      description: Which modules or commands are affected?
+      placeholder: src/player/MusicPlayer.js, command parser, docs
+
