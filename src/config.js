@@ -71,6 +71,7 @@ export function loadConfig(env = process.env) {
     gatewayUrl: normalizeGatewayUrl(env.GATEWAY_URL),
     dnsResultOrder: normalizeDnsResultOrder(env.DNS_RESULT_ORDER),
     autoGatewayUrl: parseBool(env.AUTO_GATEWAY_URL, true),
+    gatewayOnlyMode: parseBool(env.GATEWAY_ONLY_MODE, false),
     strictStartupCheck: parseBool(env.STRICT_STARTUP_CHECK, false),
     enableEmbeds: parseBool(env.ENABLE_EMBEDS, true),
     allowDefaultPrefixFallback: parseBool(env.ALLOW_DEFAULT_PREFIX_FALLBACK, false),

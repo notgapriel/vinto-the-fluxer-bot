@@ -1,6 +1,11 @@
 import { sleep } from '../utils/retry.js';
 
 export async function verifyApiConnectivity({ config, rest, logger }) {
+  if (config.gatewayOnlyMode) {
+    logger.info('Skipping REST API startup check in gateway-only mode');
+    return null;
+  }
+
   let lastError = null;
 
   for (let attempt = 1; attempt <= config.apiCheckRetries; attempt += 1) {
@@ -38,6 +43,13 @@ export async function verifyApiConnectivity({ config, rest, logger }) {
 }
 
 export async function resolveGatewayUrl({ config, rest, logger }) {
+  if (config.gatewayOnlyMode) {
+    logger.info('Gateway-only mode enabled, using configured gateway URL', {
+      gatewayUrl: config.gatewayUrl,
+    });
+    return config.gatewayUrl;
+  }
+
   if (!config.autoGatewayUrl) {
     return config.gatewayUrl;
   }

@@ -17,6 +17,7 @@ All environment variables are read in `src/config.js`. Defaults come from parsin
 | `API_BASE` | `https://api.fluxer.app/v1` | API base URL. |
 | `GATEWAY_URL` | `wss://gateway.fluxer.app` | Gateway websocket URL. |
 | `AUTO_GATEWAY_URL` | `1` | Auto-discover gateway URL if supported. |
+| `GATEWAY_ONLY_MODE` | `0` | Skip startup REST checks and use configured `GATEWAY_URL` directly. |
 | `DNS_RESULT_ORDER` | `ipv4first` | `ipv4first` or `verbatim`. |
 | `LOG_LEVEL` | `info` | Logger verbosity. |
 | `ENABLE_EMBEDS` | `1` | Disable to force plain-text replies. |

@@ -146,6 +146,10 @@ export class CommandRouter {
     this._startBackgroundTasks();
   }
 
+  setBotUserId(botUserId) {
+    this.botUserId = botUserId ? String(botUserId) : null;
+  }
+
   async handleMessage(message) {
     if (!message?.content) return;
     if (message.author?.bot) return;

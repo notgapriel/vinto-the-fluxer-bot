@@ -265,6 +265,13 @@ export class RestClient {
     return this.request('GET', `/guilds/${guildId}/members/${userId}`);
   }
 
+  async listGuildMembers(guildId, options = {}) {
+    const query = {};
+    if (options.limit != null) query.limit = options.limit;
+    if (options.after != null) query.after = options.after;
+    return this.request('GET', `/guilds/${guildId}/members`, { query });
+  }
+
   async sendTyping(channelId) {
     return this.request('POST', `/channels/${channelId}/typing`, { retryUnsafe: false });
   }

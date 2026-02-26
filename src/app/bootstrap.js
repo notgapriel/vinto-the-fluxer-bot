@@ -144,6 +144,23 @@ export async function startApp() {
     startedAt,
   });
 
+  let resolvedBotUserId = null;
+  const setBotUserId = (botUserId, source) => {
+    const normalized = botUserId ? String(botUserId) : null;
+    if (!normalized || normalized === resolvedBotUserId) return;
+
+    resolvedBotUserId = normalized;
+    permissions.setBotUserId(normalized);
+    router.setBotUserId(normalized);
+    logger.info('Bot user id resolved', { source, botUserId: normalized });
+  };
+
+  setBotUserId(me?.id, 'rest');
+
+  gateway.on('READY', (payload) => {
+    setBotUserId(payload?.user?.id, 'gateway_ready');
+  });
+
   const monitoringServer = new MonitoringServer({
     enabled: config.monitoringEnabled,
     host: config.monitoringHost,
