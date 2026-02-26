@@ -86,3 +86,85 @@ test('config command rejects users without manage guild permission', async () =>
     /Manage Server/
   );
 });
+
+test('config command allows REST role-based manage guild fallback', async () => {
+  const autoplay = buildAutoplayCommand();
+  let replied = false;
+
+  await autoplay.execute({
+    guildId: 'guild-1',
+    authorId: 'user-1',
+    args: [],
+    message: {
+      guild_id: 'guild-1',
+      author: { id: 'user-1' },
+      member: { roles: ['role-1'] },
+    },
+    rest: {
+      async getGuildMember() {
+        return { user: { id: 'user-1' }, roles: ['role-1'] };
+      },
+      async getGuild() {
+        return { id: 'guild-1', owner_id: 'owner-1' };
+      },
+      async listGuildRoles() {
+        return [{ id: 'role-1', permissions: '32' }];
+      },
+    },
+    guildConfigs: {
+      async get() {
+        return baseGuildConfig();
+      },
+    },
+    sessions: {
+      applyGuildConfig() {},
+    },
+    reply: {
+      async info() {
+        replied = true;
+      },
+    },
+  });
+
+  assert.equal(replied, true);
+});
+
+test('config command rejects REST role fallback without manage guild bit', async () => {
+  const autoplay = buildAutoplayCommand();
+
+  await assert.rejects(
+    () => autoplay.execute({
+      guildId: 'guild-2',
+      authorId: 'user-2',
+      args: [],
+      message: {
+        guild_id: 'guild-2',
+        author: { id: 'user-2' },
+        member: { roles: ['role-1'] },
+      },
+      rest: {
+        async getGuildMember() {
+          return { user: { id: 'user-2' }, roles: ['role-1'] };
+        },
+        async getGuild() {
+          return { id: 'guild-2', owner_id: 'owner-1' };
+        },
+        async listGuildRoles() {
+          return [{ id: 'role-1', permissions: '0' }];
+        },
+      },
+      guildConfigs: {
+        async get() {
+          return baseGuildConfig();
+        },
+      },
+      sessions: {
+        applyGuildConfig() {},
+      },
+      reply: {
+        async info() {},
+      },
+    }),
+    /Manage Server/
+  );
+});

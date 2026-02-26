@@ -272,6 +272,10 @@ export class RestClient {
     return this.request('GET', `/guilds/${guildId}/members`, { query });
   }
 
+  async listGuildRoles(guildId) {
+    return this.request('GET', `/guilds/${guildId}/roles`);
+  }
+
   async sendTyping(channelId) {
     return this.request('POST', `/channels/${channelId}/typing`, { retryUnsafe: false });
   }

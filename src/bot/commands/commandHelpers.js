@@ -830,12 +830,12 @@ function extractRoleIdsFromMember(member) {
   return [];
 }
 
-function computeMemberPermissionBitsFromGuild(member, guild) {
+function computeMemberPermissionBitsFromRoles(member, roles) {
   const roleIds = extractRoleIdsFromMember(member);
-  if (!roleIds.length || !Array.isArray(guild?.roles)) return null;
+  if (!roleIds.length || !Array.isArray(roles)) return null;
 
   const roleMap = new Map();
-  for (const role of guild.roles) {
+  for (const role of roles) {
     const id = String(role?.id ?? '');
     if (!id) continue;
     roleMap.set(id, role);
@@ -856,7 +856,7 @@ function computeMemberPermissionBitsFromGuild(member, guild) {
 }
 
 async function getManageGuildFromRest(ctx) {
-  if (!ctx.rest?.getGuildMember || !ctx.rest?.getGuild || !ctx.guildId || !ctx.authorId) {
+  if (!ctx.rest?.getGuildMember || !ctx.guildId || !ctx.authorId) {
     return null;
   }
 
@@ -875,19 +875,34 @@ async function getManageGuildFromRest(ctx) {
   const directVerdict = hasManageGuildFromBits(directBits);
   if (directVerdict != null) return directVerdict;
 
-  let guild;
-  try {
-    guild = await ctx.rest.getGuild(ctx.guildId);
-  } catch {
-    return null;
+  let guild = null;
+  if (ctx.rest?.getGuild) {
+    try {
+      guild = await ctx.rest.getGuild(ctx.guildId);
+    } catch {
+      guild = null;
+    }
   }
 
   const guildOwnerId = guild?.owner_id ?? guild?.ownerId ?? null;
-  if (guildOwnerId && String(guildOwnerId) === String(ctx.authorId)) {
-    return true;
+  if (guildOwnerId && String(guildOwnerId) === String(ctx.authorId)) return true;
+
+  let roles = null;
+  if (ctx.rest?.listGuildRoles) {
+    try {
+      const listed = await ctx.rest.listGuildRoles(ctx.guildId);
+      if (Array.isArray(listed)) {
+        roles = listed;
+      }
+    } catch {
+      roles = null;
+    }
+  }
+  if (!roles && Array.isArray(guild?.roles)) {
+    roles = guild.roles;
   }
 
-  const computedBits = computeMemberPermissionBitsFromGuild(member, guild);
+  const computedBits = computeMemberPermissionBitsFromRoles(member, roles);
   const computedVerdict = hasManageGuildFromBits(computedBits);
   if (computedVerdict != null) return computedVerdict;
 
