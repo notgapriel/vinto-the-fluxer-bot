@@ -1,6 +1,10 @@
 # Configuration Reference
 
-All environment variables are read in `src/config.js`. Defaults come from parsing logic or `.env.example`.
+All environment variables are read in `src/config.js`.
+
+Use `.env.example` as the single, structured source for both runtime and helper-script variables.
+
+Defaults come from parsing logic in `src/config.js`.
 
 ## Required Variables
 
@@ -49,6 +53,7 @@ All environment variables are read in `src/config.js`. Defaults come from parsin
 | `MONGODB_MIN_POOL_SIZE` | `5` | Min connection pool size. |
 | `MONGODB_CONNECT_TIMEOUT_MS` | `10000` | Connect timeout. |
 | `MONGODB_SERVER_SELECTION_TIMEOUT_MS` | `10000` | Server selection timeout. |
+| `MONGODB_PING_INTERVAL_MS` | `15000` | Background ping cadence for DB health metrics. |
 | `GUILD_CONFIG_CACHE_TTL_MS` | `60000` | Guild config cache TTL. |
 | `GUILD_CONFIG_CACHE_MAX_SIZE` | `5000` | Guild config cache capacity. |
 
@@ -71,7 +76,6 @@ All environment variables are read in `src/config.js`. Defaults come from parsin
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `DEFAULT_AUTOPLAY_ENABLED` | `0` | New guild default. |
 | `DEFAULT_DEDUPE_ENABLED` | `0` | New guild default. |
 | `DEFAULT_247_ENABLED` | `0` | New guild default. |
 | `VOTE_SKIP_RATIO` | `0.5` | Fraction required for vote-skip. |
@@ -94,12 +98,19 @@ All environment variables are read in `src/config.js`. Defaults come from parsin
 | `SPOTIFY_CLIENT_SECRET` | empty | Required together with client id and refresh token. |
 | `SPOTIFY_REFRESH_TOKEN` | empty | Required together with client id and secret. |
 | `SPOTIFY_MARKET` | `US` | Two-letter country code. |
-| `SPOTIFY_REDIRECT_URI` | `http://127.0.0.1:9876/spotify/callback` | Used by helper script. |
-| `SPOTIFY_SCOPE` | `user-read-email` | Used by helper script. |
-| `SPOTIFY_ALLOW_MISSING_STATE` | `1` | Helper script compatibility flag. |
 | `SOUNDCLOUD_CLIENT_ID` | empty | Optional explicit SoundCloud client id. |
 | `SOUNDCLOUD_AUTO_CLIENT_ID` | `1` | Auto-fetch SoundCloud client id on startup. |
 | `STRICT_MEDIA_AUTH` | `0` | Treat provider auth setup failures as fatal. |
+
+### Spotify Token Helper (Script-only)
+
+These variables are defined in `.env.example` but are only used by `npm run spotify:token`:
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SPOTIFY_REDIRECT_URI` | `http://127.0.0.1:9876/spotify/callback` | Local callback URL for helper script. |
+| `SPOTIFY_SCOPE` | `user-read-email` | OAuth scope for helper script. |
+| `SPOTIFY_ALLOW_MISSING_STATE` | `1` | Allows callback without state in local setups. |
 
 ## Binary and yt-dlp Options
 
@@ -111,6 +122,7 @@ All environment variables are read in `src/config.js`. Defaults come from parsin
 | `YTDLP_COOKIES_FROM_BROWSER` | empty | Read cookies from browser profile. |
 | `YTDLP_YOUTUBE_CLIENT` | empty | Optional YouTube extractor profile. |
 | `YTDLP_EXTRA_ARGS` | empty | Comma-separated extra yt-dlp args. |
+| `YOUTUBE_PLAYLIST_RESOLVER` | `ytdlp` | Resolver order for YouTube playlists: `ytdlp`, `playdl`, `auto` (`auto` maps to `ytdlp`). |
 
 ## Command Rate Limits
 

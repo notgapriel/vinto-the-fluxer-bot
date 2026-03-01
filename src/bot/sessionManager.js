@@ -77,8 +77,14 @@ export class SessionManager extends EventEmitter {
     this.config = options.config;
     this.logger = options.logger;
     this.guildConfigs = options.guildConfigs ?? null;
+    this.voiceStateStore = options.voiceStateStore ?? null;
+    this.botUserId = options.botUserId ? String(options.botUserId) : null;
 
     this.sessions = new Map();
+  }
+
+  setBotUserId(botUserId) {
+    this.botUserId = botUserId ? String(botUserId) : null;
   }
 
   has(guildId) {
@@ -114,6 +120,7 @@ export class SessionManager extends EventEmitter {
       ytdlpCookiesFromBrowser: this.config.ytdlpCookiesFromBrowser,
       ytdlpYoutubeClient: this.config.ytdlpYoutubeClient,
       ytdlpExtraArgs: this.config.ytdlpExtraArgs,
+      youtubePlaylistResolver: this.config.youtubePlaylistResolver,
       maxQueueSize: this.config.maxQueueSize,
       maxPlaylistTracks: this.config.maxPlaylistTracks,
       defaultVolumePercent: this.config.defaultVolumePercent,
@@ -329,7 +336,8 @@ export class SessionManager extends EventEmitter {
 
     session.idleTimer = setTimeout(async () => {
       const active = session.player.playing || session.player.queue.pendingSize > 0;
-      if (active || session.settings.stayInVoiceEnabled) {
+      const hasHumanListeners = this._hasHumanListeners(session);
+      if (active || hasHumanListeners || session.settings.stayInVoiceEnabled) {
         this._scheduleIdleTimeout(session);
         return;
       }
@@ -341,6 +349,19 @@ export class SessionManager extends EventEmitter {
 
       await this.destroy(session.guildId, 'idle_timeout');
     }, this.config.sessionIdleMs);
+  }
+
+  _hasHumanListeners(session) {
+    const store = this.voiceStateStore;
+    if (!store || typeof store.countUsersInChannel !== 'function') return false;
+
+    const guildId = String(session?.guildId ?? '').trim();
+    const channelId = String(session?.connection?.channelId ?? '').trim();
+    if (!guildId || !channelId) return false;
+
+    const excluded = this.botUserId ? [this.botUserId] : [];
+    const listeners = store.countUsersInChannel(guildId, channelId, excluded);
+    return Number.isFinite(listeners) && listeners > 0;
   }
 
   _clearIdleTimer(session) {

@@ -58,6 +58,28 @@ export async function startApp() {
     logger: logger.child('mongo'),
   });
   await mongo.connect();
+  metricSet.mongoConnected.set(1);
+
+  const pollMongoHealth = async () => {
+    const started = Date.now();
+    try {
+      await mongo.ping();
+      metricSet.mongoConnected.set(1);
+      metricSet.mongoPingLatencyMs.set(Math.max(0, Date.now() - started));
+    } catch (err) {
+      metricSet.mongoConnected.set(0);
+      metricSet.mongoPingFailuresTotal.inc(1);
+      logger.warn('MongoDB ping failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  await pollMongoHealth();
+  const mongoPingHandle = setInterval(() => {
+    pollMongoHealth().catch(() => null);
+  }, config.mongoPingIntervalMs);
+  mongoPingHandle.unref?.();
 
   const guildConfigs = new GuildConfigStore({
     collection: mongo.collection('guild_configs'),
@@ -67,7 +89,7 @@ export async function startApp() {
     defaults: {
       prefix: config.prefix,
       settings: {
-        autoplayEnabled: config.defaultAutoplayEnabled,
+        autoplayEnabled: false,
         dedupeEnabled: config.defaultDedupeEnabled,
         stayInVoiceEnabled: config.defaultStayInVoiceEnabled,
         voteSkipRatio: config.voteSkipRatio,
@@ -109,6 +131,7 @@ export async function startApp() {
     gateway,
     config,
     guildConfigs,
+    voiceStateStore,
     logger: logger.child('sessions'),
   });
 
@@ -152,6 +175,7 @@ export async function startApp() {
     if (!normalized || normalized === resolvedBotUserId) return;
 
     resolvedBotUserId = normalized;
+    sessions.setBotUserId(normalized);
     permissions.setBotUserId(normalized);
     router.setBotUserId(normalized);
     logger.info('Bot user id resolved', { source, botUserId: normalized });
@@ -229,6 +253,8 @@ export async function startApp() {
         error: err instanceof Error ? err.message : String(err),
       });
     });
+    clearInterval(mongoPingHandle);
+    metricSet.mongoConnected.set(0);
     await errorReporter?.flush?.(1_500);
 
     setTimeout(() => {

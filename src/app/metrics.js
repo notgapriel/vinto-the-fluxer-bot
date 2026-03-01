@@ -7,6 +7,7 @@ export function createAppMetrics() {
     registry,
     sessionsActive: registry.gauge('sessions_active', 'Number of active guild sessions'),
     gatewayConnected: registry.gauge('gateway_connected', 'Gateway connection state (1=connected)'),
+    gatewayHeartbeatLatencyMs: registry.gauge('gateway_heartbeat_latency_ms', 'Latest gateway heartbeat latency in milliseconds'),
     gatewayReconnects: registry.counter('gateway_reconnects_total', 'Gateway reconnect schedules'),
     tracksStarted: registry.counter('tracks_started_total', 'Tracks started'),
     trackErrors: registry.counter('track_errors_total', 'Track playback errors'),
@@ -14,6 +15,9 @@ export function createAppMetrics() {
     restRetriesTotal: registry.counter('rest_retries_total', 'REST retries triggered'),
     restRateLimitedTotal: registry.counter('rest_rate_limited_total', 'REST responses with HTTP 429'),
     restGlobalRateLimitWaitMs: registry.counter('rest_global_rate_limit_wait_ms_total', 'Total wait time spent in global REST rate limits'),
+    mongoConnected: registry.gauge('mongo_connected', 'MongoDB connection health (1=reachable)'),
+    mongoPingLatencyMs: registry.gauge('mongo_ping_latency_ms', 'Latest MongoDB ping latency in milliseconds'),
+    mongoPingFailuresTotal: registry.counter('mongo_ping_failures_total', 'MongoDB ping failures'),
   };
 }
 
@@ -22,26 +26,38 @@ export function bindGatewayMetrics(gateway, metricSet, options = {}) {
 
   const onOpen = () => {
     metricSet.gatewayConnected.set(1);
+    const latency = gateway.getHeartbeatLatencyMs?.();
+    metricSet.gatewayHeartbeatLatencyMs.set(Number.isFinite(latency) ? latency : 0);
     onConnectedChange(true);
   };
   const onClose = () => {
     metricSet.gatewayConnected.set(0);
+    metricSet.gatewayHeartbeatLatencyMs.set(0);
     onConnectedChange(false);
   };
   const onReconnectScheduled = () => {
     metricSet.gatewayReconnects.inc(1);
   };
+  const onHeartbeatAck = (payload) => {
+    const latency = Number.isFinite(payload?.latencyMs)
+      ? payload.latencyMs
+      : gateway.getHeartbeatLatencyMs?.();
+    metricSet.gatewayHeartbeatLatencyMs.set(Number.isFinite(latency) ? latency : 0);
+  };
 
   gateway.on('open', onOpen);
   gateway.on('close', onClose);
   gateway.on('reconnect_scheduled', onReconnectScheduled);
+  gateway.on('heartbeat_ack', onHeartbeatAck);
 
   metricSet.gatewayConnected.set(0);
+  metricSet.gatewayHeartbeatLatencyMs.set(0);
 
   return () => {
     gateway.off('open', onOpen);
     gateway.off('close', onClose);
     gateway.off('reconnect_scheduled', onReconnectScheduled);
+    gateway.off('heartbeat_ack', onHeartbeatAck);
   };
 }
 

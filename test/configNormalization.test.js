@@ -32,3 +32,27 @@ test('loadConfig falls back to official API base for app/web URLs', () => {
   assert.equal(config.apiBase, 'https://api.fluxer.app/v1');
   assert.equal(config.gatewayUrl, 'wss://gateway.fluxer.app');
 });
+
+test('loadConfig defaults YOUTUBE_PLAYLIST_RESOLVER to ytdlp', () => {
+  const config = loadConfig(buildEnv());
+  assert.equal(config.youtubePlaylistResolver, 'ytdlp');
+});
+
+test('loadConfig accepts playdl and auto for YOUTUBE_PLAYLIST_RESOLVER', () => {
+  const playdlConfig = loadConfig(buildEnv({
+    YOUTUBE_PLAYLIST_RESOLVER: 'playdl',
+  }));
+  const autoConfig = loadConfig(buildEnv({
+    YOUTUBE_PLAYLIST_RESOLVER: 'auto',
+  }));
+
+  assert.equal(playdlConfig.youtubePlaylistResolver, 'playdl');
+  assert.equal(autoConfig.youtubePlaylistResolver, 'ytdlp');
+});
+
+test('loadConfig rejects invalid YOUTUBE_PLAYLIST_RESOLVER values', () => {
+  assert.throws(
+    () => loadConfig(buildEnv({ YOUTUBE_PLAYLIST_RESOLVER: 'invalid' })),
+    /YOUTUBE_PLAYLIST_RESOLVER must be one of: ytdlp, playdl, auto/
+  );
+});

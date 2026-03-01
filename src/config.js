@@ -103,6 +103,13 @@ function normalizeDnsResultOrder(value) {
   throw new ConfigurationError('DNS_RESULT_ORDER must be one of: ipv4first, verbatim');
 }
 
+function normalizeYouTubePlaylistResolver(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (!normalized || normalized === 'auto') return 'ytdlp';
+  if (['ytdlp', 'playdl'].includes(normalized)) return normalized;
+  throw new ConfigurationError('YOUTUBE_PLAYLIST_RESOLVER must be one of: ytdlp, playdl, auto');
+}
+
 export function loadConfig(env = process.env) {
   const token = env.BOT_TOKEN?.trim();
   if (!token) {
@@ -150,6 +157,7 @@ export function loadConfig(env = process.env) {
     mongoMinPoolSize: parseNonNegativeInt(env.MONGODB_MIN_POOL_SIZE, 5),
     mongoConnectTimeoutMs: parsePositiveInt(env.MONGODB_CONNECT_TIMEOUT_MS, 10_000),
     mongoServerSelectionTimeoutMs: parsePositiveInt(env.MONGODB_SERVER_SELECTION_TIMEOUT_MS, 10_000),
+    mongoPingIntervalMs: parsePositiveInt(env.MONGODB_PING_INTERVAL_MS, 15_000),
     guildConfigCacheTtlMs: parsePositiveInt(env.GUILD_CONFIG_CACHE_TTL_MS, 60_000),
     guildConfigCacheMaxSize: parsePositiveInt(env.GUILD_CONFIG_CACHE_MAX_SIZE, 5_000),
 
@@ -167,8 +175,8 @@ export function loadConfig(env = process.env) {
     ytdlpCookiesFromBrowser: env.YTDLP_COOKIES_FROM_BROWSER?.trim() || null,
     ytdlpYoutubeClient: env.YTDLP_YOUTUBE_CLIENT?.trim() || null,
     ytdlpExtraArgs: env.YTDLP_EXTRA_ARGS?.trim() || null,
+    youtubePlaylistResolver: normalizeYouTubePlaylistResolver(env.YOUTUBE_PLAYLIST_RESOLVER),
 
-    defaultAutoplayEnabled: parseBool(env.DEFAULT_AUTOPLAY_ENABLED, false),
     defaultDedupeEnabled: parseBool(env.DEFAULT_DEDUPE_ENABLED, false),
     defaultStayInVoiceEnabled: parseBool(env.DEFAULT_247_ENABLED, false),
     voteSkipRatio: parseRatio(env.VOTE_SKIP_RATIO, 0.5),

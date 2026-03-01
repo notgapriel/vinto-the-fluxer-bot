@@ -16,6 +16,70 @@ const MANAGE_GUILD_PERMISSION = 1n << 5n;
 const playCooldowns = new Map();
 const pendingSearchSelections = new Map();
 const manageGuildPermissionCache = new Map();
+const EMBED_FIELD_TEXT_LIMIT = 1000;
+const TRACK_LINE_MAX_CHARS = 240;
+
+function truncateWithEllipsis(text, maxChars) {
+  const value = String(text ?? '');
+  const limit = Number.parseInt(String(maxChars), 10);
+  if (!Number.isFinite(limit) || limit <= 0) return '';
+  if (value.length <= limit) return value;
+  if (limit <= 3) return '.'.repeat(limit);
+  return `${value.slice(0, limit - 3)}...`;
+}
+
+function formatTrackListLine(track, index = null, maxChars = TRACK_LINE_MAX_CHARS) {
+  const prefix = Number.isFinite(index) ? `${index}. ` : '';
+  const by = track?.requestedBy ? ` • requested by <@${track.requestedBy}>` : '';
+  const duration = String(track?.duration ?? 'Unknown');
+  const titleRaw = String(track?.title ?? 'Unknown title').trim() || 'Unknown title';
+
+  const staticLength = prefix.length + by.length + duration.length + 7;
+  const titleBudget = Math.max(16, Number.parseInt(String(maxChars), 10) - staticLength);
+  const safeTitle = truncateWithEllipsis(titleRaw, titleBudget);
+  return `${prefix}**${safeTitle}** (${duration})${by}`;
+}
+
+function joinLinesWithinLimit(lines, maxChars = EMBED_FIELD_TEXT_LIMIT) {
+  const normalized = Array.isArray(lines)
+    ? lines.map((line) => String(line ?? '').trim()).filter(Boolean)
+    : [];
+
+  if (!normalized.length) return '-';
+
+  const limit = Number.parseInt(String(maxChars), 10);
+  const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : EMBED_FIELD_TEXT_LIMIT;
+  const kept = [];
+  let used = 0;
+
+  for (const line of normalized) {
+    const separatorLength = kept.length > 0 ? 1 : 0;
+    const nextLength = used + separatorLength + line.length;
+    if (nextLength > safeLimit) break;
+    kept.push(line);
+    used = nextLength;
+  }
+
+  if (!kept.length) {
+    return truncateWithEllipsis(normalized[0], safeLimit);
+  }
+
+  let hidden = normalized.length - kept.length;
+  while (hidden > 0) {
+    const suffix = `\n...and ${hidden} more`;
+    const body = kept.join('\n');
+    if (body.length + suffix.length <= safeLimit) {
+      return `${body}${suffix}`;
+    }
+
+    if (kept.length <= 1) break;
+    kept.pop();
+    hidden = normalized.length - kept.length;
+  }
+
+  return kept.join('\n');
+}
+
 function parseVoiceChannelArgument(args) {
   if (!args?.length) return { channelId: null, rest: args ?? [] };
 
@@ -498,19 +562,22 @@ function formatQueuePage(session, page) {
     const progressSec = session.player.getProgressSeconds();
     fields.push({
       name: 'Now Playing',
-      value: `${trackLabel(current)}\n${buildProgressBar(progressSec, durationSec ?? Number.NaN)}`.slice(0, 1000),
+      value: joinLinesWithinLimit([
+        formatTrackListLine(current, null, 760),
+        buildProgressBar(progressSec, durationSec ?? Number.NaN),
+      ], EMBED_FIELD_TEXT_LIMIT),
     });
   }
 
   if (pageItems.length) {
     const lines = pageItems.map((track, i) => {
       const idx = start + i + 1;
-      return `${idx}. ${trackLabel(track)}`;
+      return formatTrackListLine(track, idx, TRACK_LINE_MAX_CHARS);
     });
 
     fields.push({
       name: `Up Next (Page ${safePage}/${totalPages})`,
-      value: lines.join('\n').slice(0, 1000),
+      value: joinLinesWithinLimit(lines, EMBED_FIELD_TEXT_LIMIT),
     });
   }
 
@@ -543,10 +610,10 @@ function formatHistoryPage(session, page) {
     description: `History page **${safePage}/${totalPages}** • Total tracks: **${history.length}**`,
     fields: [{
       name: 'Recently Played',
-      value: pageItems
-        .map((track, idx) => `${start + idx + 1}. ${trackLabel(track)}`)
-        .join('\n')
-        .slice(0, 1000),
+      value: joinLinesWithinLimit(
+        pageItems.map((track, idx) => formatTrackListLine(track, start + idx + 1, TRACK_LINE_MAX_CHARS)),
+        EMBED_FIELD_TEXT_LIMIT
+      ),
     }],
   };
 }

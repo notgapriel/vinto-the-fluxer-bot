@@ -33,6 +33,7 @@ const EQ_PRESETS = {
   vocal: [-1, 1, 3, 3, 1],
 };
 const EQ_BANDS = [90, 250, 1000, 4000, 12000];
+const YT_PLAYLIST_RESOLVERS = new Set(['ytdlp', 'playdl']);
 
 function isHttpUrl(value) {
   try {
@@ -50,6 +51,68 @@ function isYouTubeUrl(value) {
   } catch {
     return false;
   }
+}
+
+function extractYouTubeVideoId(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+
+    if (host.includes('youtu.be')) {
+      const segment = String(parsed.pathname ?? '').split('/').filter(Boolean)[0];
+      return segment ? segment.trim() : null;
+    }
+
+    if (host.includes('youtube.com')) {
+      const v = String(parsed.searchParams.get('v') ?? '').trim();
+      return v || null;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function toCanonicalYouTubeWatchUrl(value) {
+  const videoId = extractYouTubeVideoId(value);
+  if (!videoId) return null;
+  return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+}
+
+function normalizeYouTubeVideoUrlFromEntry(entry) {
+  const webpageUrl = String(entry?.webpage_url ?? '').trim();
+  if (webpageUrl && isYouTubeUrl(webpageUrl)) return webpageUrl;
+
+  const rawUrl = String(entry?.url ?? '').trim();
+  if (rawUrl && isYouTubeUrl(rawUrl)) return rawUrl;
+
+  const id = String(entry?.id ?? '').trim();
+  if (id) return `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`;
+
+  if (/^[\w-]{6,}$/.test(rawUrl)) {
+    return `https://www.youtube.com/watch?v=${encodeURIComponent(rawUrl)}`;
+  }
+
+  return null;
+}
+
+function getYouTubePlaylistId(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    if (!host.includes('youtube.com') && !host.includes('youtu.be')) return null;
+    const list = String(parsed.searchParams.get('list') ?? '').trim();
+    return list || null;
+  } catch {
+    return null;
+  }
+}
+
+function toCanonicalYouTubePlaylistUrl(value) {
+  const listId = getYouTubePlaylistId(value);
+  if (!listId) return null;
+  return `https://www.youtube.com/playlist?list=${encodeURIComponent(listId)}`;
 }
 
 function isSoundCloudUrl(value) {
@@ -246,6 +309,13 @@ function normalizeYtDlpArgs(args) {
   return normalized;
 }
 
+function normalizeYouTubePlaylistResolver(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (!normalized || normalized === 'auto') return 'ytdlp';
+  if (YT_PLAYLIST_RESOLVERS.has(normalized)) return normalized;
+  return 'ytdlp';
+}
+
 function sanitizeUrlToSearchQuery(url) {
   try {
     const parsed = new URL(url);
@@ -315,6 +385,9 @@ export class MusicPlayer extends EventEmitter {
     this.enableYtPlayback = options.enableYtPlayback !== false;
     this.enableSpotifyImport = options.enableSpotifyImport !== false;
     this.enableDeezerImport = options.enableDeezerImport !== false;
+    this.youtubePlaylistResolver = normalizeYouTubePlaylistResolver(
+      options.youtubePlaylistResolver ?? process.env.YOUTUBE_PLAYLIST_RESOLVER
+    );
 
     this.filterPreset = 'off';
     this.eqPreset = 'flat';
@@ -921,12 +994,20 @@ export class MusicPlayer extends EventEmitter {
 
     const url = await this._normalizeInputUrl(raw);
     const validation = await playdl.validate(url).catch(() => false);
+    const playlistUrl = toCanonicalYouTubePlaylistUrl(url);
+    const effectiveValidation = (
+      playlistUrl
+        ? 'yt_playlist'
+        : validation
+    );
 
-    switch (validation) {
+    switch (effectiveValidation) {
       case 'yt_video':
         return this._resolveSingleYouTubeTrack(url, requestedBy);
       case 'yt_playlist':
-        return this._resolveYouTubePlaylistTracks(url, requestedBy);
+        return this._resolveYouTubePlaylistTracks(playlistUrl ?? url, requestedBy, {
+          fallbackWatchUrl: toCanonicalYouTubeWatchUrl(url),
+        });
       case 'so_track':
         return this._resolveSoundCloudTrack(url, requestedBy);
       case 'so_playlist':
@@ -1056,22 +1137,85 @@ export class MusicPlayer extends EventEmitter {
     }
   }
 
-  async _resolveYouTubePlaylistTracks(url, requestedBy) {
+  async _resolveYouTubePlaylistTracks(url, requestedBy, options = {}) {
     if (!this.enableYtPlayback) {
       throw new ValidationError('YouTube playback is currently disabled by bot configuration.');
     }
 
-    let playlist;
-    try {
-      playlist = await playdl.playlist_info(url, { incomplete: true });
-    } catch (err) {
-      if (!isPlayDlBrowseFailure(err)) throw err;
-      this.logger?.warn?.('play-dl playlist lookup failed, falling back to single URL resolution', {
-        url,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return this._resolveSingleUrlTrack(url, requestedBy);
+    const order = this.youtubePlaylistResolver === 'playdl'
+      ? ['playdl', 'ytdlp']
+      : ['ytdlp', 'playdl'];
+
+    const resolverErrors = [];
+    for (const resolver of order) {
+      if (resolver === 'ytdlp') {
+        try {
+          const tracks = await this._resolveYouTubePlaylistTracksViaYtDlp(url, requestedBy);
+          if (tracks.length) {
+            this.logger?.info?.('Resolved YouTube playlist via yt-dlp', {
+              url,
+              count: tracks.length,
+              mode: this.youtubePlaylistResolver,
+            });
+            return tracks;
+          }
+          throw new Error('yt-dlp returned no playlist entries');
+        } catch (err) {
+          resolverErrors.push({ resolver, error: err });
+          this.logger?.warn?.('yt-dlp playlist lookup failed', {
+            url,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        continue;
+      }
+
+      try {
+        const tracks = await this._resolveYouTubePlaylistTracksViaPlayDl(url, requestedBy);
+        if (tracks.length) {
+          if (this.youtubePlaylistResolver !== 'playdl') {
+            this.logger?.info?.('Resolved YouTube playlist via play-dl fallback', {
+              url,
+              count: tracks.length,
+            });
+          }
+          return tracks;
+        }
+        throw new Error('play-dl returned no playlist entries');
+      } catch (err) {
+        resolverErrors.push({ resolver, error: err });
+        this.logger?.warn?.('play-dl playlist lookup failed', {
+          url,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
+
+    const watchUrl = options.fallbackWatchUrl ?? toCanonicalYouTubeWatchUrl(url);
+    if (watchUrl) {
+      return this._resolveSingleYouTubeTrack(watchUrl, requestedBy);
+    }
+
+    if (resolverErrors.length > 0) {
+      const summary = resolverErrors
+        .map(({ resolver, error }) => `${resolver}:${error instanceof Error ? error.message : String(error)}`)
+        .join(' | ')
+        .slice(0, 900);
+      this.logger?.warn?.('All YouTube playlist resolvers failed, using search fallback', {
+        url,
+        errors: summary,
+      });
+    }
+
+    return this._resolveFromUrlFallbackSearch(url, requestedBy, 'youtube-playlist-fallback');
+  }
+
+  async _fetchYouTubePlaylistInfo(url) {
+    return playdl.playlist_info(url, { incomplete: true });
+  }
+
+  async _resolveYouTubePlaylistTracksViaPlayDl(url, requestedBy) {
+    const playlist = await this._fetchYouTubePlaylistInfo(url);
     await playlist.fetch(this.maxPlaylistTracks);
 
     const videos = [];
@@ -1094,6 +1238,63 @@ export class MusicPlayer extends EventEmitter {
       requestedBy,
       source: 'youtube-playlist',
     }));
+  }
+
+  async _resolveYouTubePlaylistTracksViaYtDlp(url, requestedBy) {
+    const safeLimit = Math.max(1, Number.parseInt(String(this.maxPlaylistTracks ?? 25), 10) || 25);
+    const args = [
+      '--ignore-config',
+      '--quiet',
+      '--no-warnings',
+      '--skip-download',
+      '--flat-playlist',
+      '--dump-single-json',
+      '--playlist-end', String(safeLimit),
+    ];
+
+    if (this.ytdlpYoutubeClient) {
+      args.push('--extractor-args', `youtube:player_client=${this.ytdlpYoutubeClient}`);
+    }
+    if (this.ytdlpCookiesFile) {
+      args.push('--cookies', this.ytdlpCookiesFile);
+    }
+    if (this.ytdlpCookiesFromBrowser) {
+      args.push('--cookies-from-browser', this.ytdlpCookiesFromBrowser);
+    }
+
+    args.push(url);
+    const { stdout } = await this._runYtDlpCommand(args, 25_000);
+    if (!stdout?.trim()) return [];
+
+    let payload;
+    try {
+      payload = JSON.parse(stdout);
+    } catch {
+      return [];
+    }
+
+    const entries = Array.isArray(payload?.entries)
+      ? payload.entries
+      : [];
+
+    const tracks = [];
+    for (const entry of entries) {
+      if (tracks.length >= safeLimit) break;
+      const videoUrl = normalizeYouTubeVideoUrlFromEntry(entry);
+      if (!videoUrl) continue;
+
+      const title = String(entry?.title ?? '').trim() || videoUrl;
+      const duration = Number.isFinite(entry?.duration) ? entry.duration : 'Unknown';
+      tracks.push(this._buildTrack({
+        title,
+        url: videoUrl,
+        duration,
+        requestedBy,
+        source: 'youtube-playlist-ytdlp',
+      }));
+    }
+
+    return tracks;
   }
 
   async _resolveSoundCloudTrack(url, requestedBy) {

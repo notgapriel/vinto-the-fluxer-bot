@@ -65,4 +65,11 @@ export class MongoService {
     this.client = null;
     this.db = null;
   }
+
+  async ping() {
+    if (!this.db) {
+      throw new Error('MongoService is not connected yet');
+    }
+    await this.db.command({ ping: 1 });
+  }
 }
