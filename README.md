@@ -2,6 +2,10 @@
 
 Robust, self-hostable music bot for Fluxer with resilient gateway handling, queue/session safety, and persistent guild-level music data.
 
+[![Invite Bot](https://img.shields.io/badge/Invite-Hosted%20Bot-ff2d78?style=for-the-badge)](https://web.fluxer.app/oauth2/authorize?client_id=1474774210677452817&scope=bot&permissions=3525696)
+[![Support Server](https://img.shields.io/badge/Support-Fluxer%20Server-2ea44f?style=for-the-badge)](https://fluxer.gg/iXnSOr8l)
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Q5Q31VDH1Z)
+
 ## Why This Project
 
 - Production-minded architecture (reconnect/resume, retries, graceful shutdown).
@@ -12,20 +16,11 @@ Robust, self-hostable music bot for Fluxer with resilient gateway handling, queu
 
 ## Feature Overview
 
-- Reliable connectivity:
-  - gateway heartbeat watchdog, reconnect backoff, session resume
-  - hardened REST retries and `429` handling
-- Music playback:
-  - queue management, play-next, seek, history, loop, shuffle, filters, EQ
-  - DJ role controls and vote-skip for shared voice channels
-  - URL import from Spotify/Deezer/SoundCloud resolved to playable YouTube tracks
-- Persistence:
-  - guild config store with cache and MongoDB persistence
-  - guild playlists, user favorites, and playback history
-- Operations:
-  - `/healthz`, `/readyz`, `/metrics`
-  - structured logging
-  - optional Sentry exceptions
+- Reliable connectivity: gateway heartbeat watchdog, reconnect backoff, session resume, hardened REST retries and `429` handling.
+- Music playback: queue management, play-next, seek, history, loop, shuffle, filters, EQ, DJ role controls, and vote-skip for shared voice channels.
+- URL import: Spotify/Deezer/SoundCloud links resolved to playable YouTube tracks.
+- Persistence: guild config store with cache + MongoDB, plus guild playlists, user favorites, and playback history.
+- Operations: `/healthz`, `/readyz`, `/metrics`, structured logging, and optional Sentry exception reporting.
 
 ## Requirements
 
