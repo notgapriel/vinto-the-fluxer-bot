@@ -134,7 +134,7 @@ export class Gateway extends EventEmitter {
       guild_id: guildId,
       channel_id: channelId,
       self_mute: false,
-      self_deaf: false,
+      self_deaf: true,
     });
   }
 

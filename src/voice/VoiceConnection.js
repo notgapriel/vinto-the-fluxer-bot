@@ -39,6 +39,10 @@ export class VoiceConnection {
     return Boolean(this.room?.isConnected);
   }
 
+  get isStreaming() {
+    return Boolean(this.currentAudioStream);
+  }
+
   async connect(channelId) {
     if (!channelId) {
       throw new Error('Missing voice channel id.');

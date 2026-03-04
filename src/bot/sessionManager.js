@@ -335,7 +335,7 @@ export class SessionManager extends EventEmitter {
     if (session.settings.stayInVoiceEnabled) return;
 
     session.idleTimer = setTimeout(async () => {
-      const active = session.player.playing || session.player.queue.pendingSize > 0;
+      const active = this._isSessionPlaybackActive(session);
       const hasHumanListeners = this._hasHumanListeners(session);
       if (active || hasHumanListeners || session.settings.stayInVoiceEnabled) {
         this._scheduleIdleTimeout(session);
@@ -349,6 +349,18 @@ export class SessionManager extends EventEmitter {
 
       await this.destroy(session.guildId, 'idle_timeout');
     }, this.config.sessionIdleMs);
+  }
+
+  _isSessionPlaybackActive(session) {
+    const player = session?.player ?? null;
+    const connection = session?.connection ?? null;
+
+    const isPlayingFlag = Boolean(player?.playing);
+    const hasCurrentTrack = Boolean(player?.currentTrack);
+    const hasQueuedTracks = Number(player?.queue?.pendingSize ?? 0) > 0;
+    const isStreaming = Boolean(connection?.isStreaming);
+
+    return isPlayingFlag || hasCurrentTrack || hasQueuedTracks || isStreaming;
   }
 
   _hasHumanListeners(session) {

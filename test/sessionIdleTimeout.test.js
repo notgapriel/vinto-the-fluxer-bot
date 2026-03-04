@@ -30,6 +30,7 @@ function createIdleSession() {
     },
     player: {
       playing: false,
+      currentTrack: null,
       queue: {
         pendingSize: 0,
       },
@@ -105,6 +106,54 @@ test('idle timeout does not destroy session while playback is active', async () 
   });
   const session = createIdleSession();
   session.player.playing = true;
+
+  let destroyCalls = 0;
+  manager.destroy = async () => {
+    destroyCalls += 1;
+    return true;
+  };
+
+  manager._scheduleIdleTimeout(session);
+  await sleep(55);
+  manager._clearIdleTimer(session);
+
+  assert.equal(destroyCalls, 0);
+});
+
+test('idle timeout does not destroy session while a current track is present', async () => {
+  const manager = createManager({
+    voiceStateStore: {
+      countUsersInChannel() {
+        return 0;
+      },
+    },
+  });
+  const session = createIdleSession();
+  session.player.currentTrack = { id: 'track-1' };
+
+  let destroyCalls = 0;
+  manager.destroy = async () => {
+    destroyCalls += 1;
+    return true;
+  };
+
+  manager._scheduleIdleTimeout(session);
+  await sleep(55);
+  manager._clearIdleTimer(session);
+
+  assert.equal(destroyCalls, 0);
+});
+
+test('idle timeout does not destroy session while voice stream is active', async () => {
+  const manager = createManager({
+    voiceStateStore: {
+      countUsersInChannel() {
+        return 0;
+      },
+    },
+  });
+  const session = createIdleSession();
+  session.connection.isStreaming = true;
 
   let destroyCalls = 0;
   manager.destroy = async () => {
