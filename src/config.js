@@ -150,6 +150,7 @@ export function loadConfig(env = process.env) {
     defaultVolumePercent: parsePositiveInt(env.DEFAULT_VOLUME_PERCENT, 100),
     maxVolumePercent: parsePositiveInt(env.MAX_VOLUME_PERCENT, 200),
     minVolumePercent: parseNonNegativeInt(env.MIN_VOLUME_PERCENT, 0),
+    voiceMaxBitrate: parsePositiveInt(env.VOICE_MAX_BITRATE, 192_000),
 
     mongoUri: env.MONGODB_URI?.trim() || null,
     mongoDb: env.MONGODB_DB?.trim() || 'fluxer_music_bot',
@@ -167,6 +168,7 @@ export function loadConfig(env = process.env) {
     spotifyMarket: (env.SPOTIFY_MARKET?.trim() || 'US').toUpperCase(),
     soundcloudClientId: env.SOUNDCLOUD_CLIENT_ID?.trim() || null,
     soundcloudAutoClientId: parseBool(env.SOUNDCLOUD_AUTO_CLIENT_ID, true),
+    deezerArl: env.DEEZER_ARL?.trim() || null,
     strictMediaAuth: parseBool(env.STRICT_MEDIA_AUTH, false),
 
     ffmpegBin: env.FFMPEG_BIN?.trim() || null,
@@ -189,6 +191,8 @@ export function loadConfig(env = process.env) {
     playCommandCooldownMs: parseNonNegativeInt(env.PLAY_COMMAND_COOLDOWN_MS, 2_000),
     searchResultLimit: parsePositiveInt(env.SEARCH_RESULT_LIMIT, 5),
     searchPickTimeoutMs: parsePositiveInt(env.SEARCH_PICK_TIMEOUT_MS, 45_000),
+    playbackDiagnosticsEnabled: parseBool(env.PLAYBACK_DIAGNOSTICS_ENABLED, false),
+    playbackDiagnosticsIntervalMs: parsePositiveInt(env.PLAYBACK_DIAGNOSTICS_INTERVAL_MS, 1_000),
 
     commandRateLimitEnabled: parseBool(env.COMMAND_RATE_LIMIT_ENABLED, true),
     commandUserWindowMs: parsePositiveInt(env.COMMAND_USER_WINDOW_MS, 10_000),

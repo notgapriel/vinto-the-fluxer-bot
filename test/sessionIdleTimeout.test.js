@@ -167,3 +167,31 @@ test('idle timeout does not destroy session while voice stream is active', async
 
   assert.equal(destroyCalls, 0);
 });
+
+test('idle timeout ignores stale timer from replaced session instance', async () => {
+  const manager = createManager({
+    voiceStateStore: {
+      countUsersInChannel() {
+        return 0;
+      },
+    },
+  });
+
+  const stale = createIdleSession();
+  const active = createIdleSession();
+  active.player.playing = true;
+
+  manager.sessions.set('guild-1', active);
+
+  let destroyCalls = 0;
+  manager.destroy = async () => {
+    destroyCalls += 1;
+    return true;
+  };
+
+  manager._scheduleIdleTimeout(stale);
+  await sleep(55);
+  manager._clearIdleTimer(stale);
+
+  assert.equal(destroyCalls, 0);
+});

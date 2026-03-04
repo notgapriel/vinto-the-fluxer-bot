@@ -68,9 +68,12 @@ Defaults come from parsing logic in `src/config.js`.
 | `DEFAULT_VOLUME_PERCENT` | `100` | Initial playback volume. |
 | `MIN_VOLUME_PERCENT` | `0` | Lower volume bound. |
 | `MAX_VOLUME_PERCENT` | `200` | Upper volume bound. |
+| `VOICE_MAX_BITRATE` | `192000` | Target max audio publish bitrate for the live voice track (bps). |
 | `PLAY_COMMAND_COOLDOWN_MS` | `2000` | Per-user cooldown for `play`. |
 | `SEARCH_RESULT_LIMIT` | `5` | Max results for interactive search (`<=10`). |
 | `SEARCH_PICK_TIMEOUT_MS` | `45000` | Timeout for `pick` follow-up. |
+| `PLAYBACK_DIAGNOSTICS_ENABLED` | `0` | Emit periodic runtime diagnostics while audio is playing. |
+| `PLAYBACK_DIAGNOSTICS_INTERVAL_MS` | `1000` | Diagnostics tick interval in milliseconds. |
 
 ## Guild Defaults
 
@@ -100,6 +103,7 @@ Defaults come from parsing logic in `src/config.js`.
 | `SPOTIFY_MARKET` | `US` | Two-letter country code. |
 | `SOUNDCLOUD_CLIENT_ID` | empty | Optional explicit SoundCloud client id. |
 | `SOUNDCLOUD_AUTO_CLIENT_ID` | `1` | Auto-fetch SoundCloud client id on startup. |
+| `DEEZER_ARL` | empty | Optional Deezer ARL cookie value for best-effort direct Deezer playback path. |
 | `STRICT_MEDIA_AUTH` | `0` | Treat provider auth setup failures as fatal. |
 
 ### Spotify Token Helper (Script-only)

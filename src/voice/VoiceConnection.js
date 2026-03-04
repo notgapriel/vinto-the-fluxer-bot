@@ -15,6 +15,7 @@ const SAMPLES_PER_CHANNEL = (SAMPLE_RATE * FRAME_DURATION_MS) / 1000;
 const SAMPLES_PER_FRAME = SAMPLES_PER_CHANNEL * CHANNELS;
 const BYTES_PER_SAMPLE = 2;
 const BYTES_PER_FRAME = SAMPLES_PER_FRAME * BYTES_PER_SAMPLE;
+const STATS_TIMEOUT_MS = 750;
 
 export class VoiceConnection {
   constructor(gateway, guildId, options = {}) {
@@ -22,6 +23,9 @@ export class VoiceConnection {
     this.guildId = guildId;
     this.logger = options.logger;
     this.connectTimeoutMs = options.connectTimeoutMs ?? 15_000;
+    this.voiceMaxBitrate = Number.isFinite(options.voiceMaxBitrate)
+      ? Math.max(24_000, Math.min(320_000, Math.trunc(options.voiceMaxBitrate)))
+      : 192_000;
 
     this.room = null;
     this.channelId = null;
@@ -33,6 +37,9 @@ export class VoiceConnection {
     this.audioPumpToken = 0;
     this.playbackPaused = false;
     this.pauseWaiters = [];
+    this._transportStatsState = null;
+    this._pumpStats = this._createPumpStats();
+    this._pumpStatsSample = null;
   }
 
   get connected() {
@@ -107,6 +114,9 @@ export class VoiceConnection {
 
     this._stopAudioPump();
     this.currentAudioStream = pcmStream;
+    this._pumpStats = this._createPumpStats();
+    this._pumpStats.startedAtMs = Date.now();
+    this._pumpStatsSample = null;
 
     const token = ++this.audioPumpToken;
     this._pumpPcmStream(pcmStream, this.audioSource, token).catch((err) => {
@@ -156,8 +166,14 @@ export class VoiceConnection {
     this.audioSource = new AudioSource(SAMPLE_RATE, CHANNELS);
     this.audioTrack = LocalAudioTrack.createAudioTrack('music', this.audioSource);
 
-    const options = new TrackPublishOptions();
-    options.source = TrackSource.SOURCE_MICROPHONE;
+    const options = new TrackPublishOptions({
+      source: TrackSource.SOURCE_MICROPHONE,
+      dtx: false,
+      red: false,
+      audioEncoding: {
+        maxBitrate: BigInt(this.voiceMaxBitrate),
+      },
+    });
 
     const publication = await participant.publishTrack(this.audioTrack, options);
     this.audioTrackSid = publication?.sid ?? null;
@@ -177,6 +193,7 @@ export class VoiceConnection {
     }
 
     this.currentAudioStream = null;
+    this._pumpStatsSample = null;
 
     try {
       this.audioSource?.clearQueue();
@@ -196,6 +213,25 @@ export class VoiceConnection {
     this.playbackPaused = false;
     this._flushPauseWaiters();
     return true;
+  }
+
+  async getDiagnostics() {
+    const base = {
+      connected: this.connected,
+      isStreaming: this.isStreaming,
+      guildId: this.guildId,
+      channelId: this.channelId ?? null,
+      playbackPaused: this.playbackPaused,
+      queuedDurationMs: Number.isFinite(this.audioSource?.queuedDuration)
+        ? Number(this.audioSource.queuedDuration)
+        : null,
+      trackSid: this.audioTrackSid ?? null,
+      voiceMaxBitrate: this.voiceMaxBitrate,
+    };
+
+    const transport = await this._collectTransportStats();
+    const pump = this._collectPumpStatsSnapshot();
+    return { ...base, transport, pump };
   }
 
   _flushPauseWaiters() {
@@ -236,8 +272,146 @@ export class VoiceConnection {
     );
   }
 
+  _createPumpStats() {
+    return {
+      startedAtMs: null,
+      bytesIn: 0,
+      framesCaptured: 0,
+      maxQueuedDurationMs: 0,
+      backpressureWaits: 0,
+      pendingBufferBytes: 0,
+    };
+  }
+
+  _collectPumpStatsSnapshot() {
+    const stats = this._pumpStats ?? this._createPumpStats();
+    const nowMs = Date.now();
+    const prev = this._pumpStatsSample;
+
+    let inputKbps = null;
+    let framesPerSec = null;
+    if (prev && nowMs > prev.tsMs) {
+      const deltaMs = nowMs - prev.tsMs;
+      const deltaBytes = Math.max(0, stats.bytesIn - prev.bytesIn);
+      const deltaFrames = Math.max(0, stats.framesCaptured - prev.framesCaptured);
+      inputKbps = Math.round((deltaBytes * 8) / deltaMs);
+      framesPerSec = Number(((deltaFrames * 1000) / deltaMs).toFixed(1));
+    }
+
+    this._pumpStatsSample = {
+      tsMs: nowMs,
+      bytesIn: stats.bytesIn,
+      framesCaptured: stats.framesCaptured,
+    };
+
+    return {
+      inputKbps,
+      framesPerSec,
+      bytesIn: stats.bytesIn,
+      framesCaptured: stats.framesCaptured,
+      pendingBufferBytes: stats.pendingBufferBytes,
+      maxQueuedDurationMs: stats.maxQueuedDurationMs,
+      backpressureWaits: stats.backpressureWaits,
+      uptimeSec: stats.startedAtMs ? Math.max(0, Math.floor((nowMs - stats.startedAtMs) / 1000)) : 0,
+    };
+  }
+
+  async _collectTransportStats() {
+    const peerConnection = this._resolvePublisherPeerConnection();
+    if (!peerConnection?.getStats) {
+      return null;
+    }
+
+    let report;
+    try {
+      report = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('stats-timeout'));
+        }, STATS_TIMEOUT_MS);
+
+        Promise.resolve(peerConnection.getStats())
+          .then((value) => {
+            clearTimeout(timeout);
+            resolve(value);
+          })
+          .catch((err) => {
+            clearTimeout(timeout);
+            reject(err);
+          });
+      });
+    } catch {
+      return null;
+    }
+
+    const rows = [];
+    if (report && typeof report.forEach === 'function') {
+      report.forEach((entry) => rows.push(entry));
+    } else if (Array.isArray(report)) {
+      rows.push(...report);
+    } else if (report && typeof report === 'object') {
+      rows.push(...Object.values(report));
+    }
+
+    let bytesSent = null;
+    let packetsSent = null;
+    let packetsLost = null;
+    let roundTripTimeSec = null;
+    let jitterSec = null;
+
+    for (const row of rows) {
+      const type = String(row?.type ?? '').toLowerCase();
+      const kind = String(row?.kind ?? row?.mediaType ?? '').toLowerCase();
+      if (kind !== 'audio') continue;
+
+      if (type === 'outbound-rtp') {
+        if (Number.isFinite(row?.bytesSent)) bytesSent = Number(row.bytesSent);
+        if (Number.isFinite(row?.packetsSent)) packetsSent = Number(row.packetsSent);
+      } else if (type === 'remote-inbound-rtp') {
+        if (Number.isFinite(row?.packetsLost)) packetsLost = Number(row.packetsLost);
+        if (Number.isFinite(row?.roundTripTime)) roundTripTimeSec = Number(row.roundTripTime);
+        if (Number.isFinite(row?.jitter)) jitterSec = Number(row.jitter);
+      }
+    }
+
+    const nowMs = Date.now();
+    let outboundBitrateKbps = null;
+    if (Number.isFinite(bytesSent) && this._transportStatsState?.bytesSent != null && this._transportStatsState?.tsMs != null) {
+      const deltaBytes = bytesSent - this._transportStatsState.bytesSent;
+      const deltaMs = nowMs - this._transportStatsState.tsMs;
+      if (deltaBytes >= 0 && deltaMs > 0) {
+        outboundBitrateKbps = Math.round((deltaBytes * 8) / deltaMs);
+      }
+    }
+
+    this._transportStatsState = Number.isFinite(bytesSent)
+      ? { bytesSent, tsMs: nowMs }
+      : this._transportStatsState;
+
+    return {
+      outboundBitrateKbps,
+      packetsSent,
+      packetsLost,
+      roundTripTimeMs: Number.isFinite(roundTripTimeSec) ? Math.round(roundTripTimeSec * 1000) : null,
+      jitterMs: Number.isFinite(jitterSec) ? Math.round(jitterSec * 1000) : null,
+    };
+  }
+
+  _resolvePublisherPeerConnection() {
+    const room = this.room;
+    if (!room) return null;
+
+    return (
+      room?.engine?.publisher?.pc
+      || room?.engine?.pcManager?.publisher?.pc
+      || room?.engine?.client?.pcManager?.publisher?.pc
+      || room?.engine?.client?.publisher?.pc
+      || null
+    );
+  }
+
   async _pumpPcmStream(stream, source, token) {
     let pending = Buffer.alloc(0);
+    const stats = this._pumpStats ?? this._createPumpStats();
 
     try {
       for await (const chunk of stream) {
@@ -247,8 +421,10 @@ export class VoiceConnection {
 
         const asBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         if (!asBuffer.length) continue;
+        stats.bytesIn += asBuffer.length;
 
         pending = pending.length ? Buffer.concat([pending, asBuffer]) : asBuffer;
+        stats.pendingBufferBytes = pending.length;
 
         while (pending.length >= BYTES_PER_FRAME && token === this.audioPumpToken) {
           await this._waitWhilePaused(token);
@@ -261,10 +437,16 @@ export class VoiceConnection {
           const frame = new AudioFrame(new Int16Array(samples), SAMPLE_RATE, CHANNELS, SAMPLES_PER_CHANNEL);
 
           if (source.queuedDuration > 500) {
+            stats.backpressureWaits += 1;
             await source.waitForPlayout();
+          }
+          if (Number.isFinite(source.queuedDuration)) {
+            stats.maxQueuedDurationMs = Math.max(stats.maxQueuedDurationMs, Number(source.queuedDuration));
           }
 
           await source.captureFrame(frame);
+          stats.framesCaptured += 1;
+          stats.pendingBufferBytes = pending.length;
         }
       }
 
@@ -275,6 +457,8 @@ export class VoiceConnection {
         const samples = new Int16Array(padded.buffer, padded.byteOffset, SAMPLES_PER_FRAME);
         const frame = new AudioFrame(new Int16Array(samples), SAMPLE_RATE, CHANNELS, SAMPLES_PER_CHANNEL);
         await source.captureFrame(frame);
+        stats.framesCaptured += 1;
+        stats.pendingBufferBytes = 0;
       }
     } finally {
       if (token === this.audioPumpToken) {

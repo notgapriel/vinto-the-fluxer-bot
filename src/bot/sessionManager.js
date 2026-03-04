@@ -108,6 +108,7 @@ export class SessionManager extends EventEmitter {
 
     const connection = new VoiceConnection(this.gateway, guildId, {
       logger: this.logger?.child?.('voice') ?? this.logger,
+      voiceMaxBitrate: this.config.voiceMaxBitrate,
     });
 
     const player = new MusicPlayer(connection, {
@@ -128,6 +129,9 @@ export class SessionManager extends EventEmitter {
       enableYtPlayback: this.config.enableYtPlayback,
       enableSpotifyImport: this.config.enableSpotifyImport,
       enableDeezerImport: this.config.enableDeezerImport,
+      soundcloudClientId: this.config.soundcloudClientId,
+      soundcloudAutoClientId: this.config.soundcloudAutoClientId,
+      deezerArl: this.config.deezerArl,
     });
 
     const session = {
@@ -143,6 +147,10 @@ export class SessionManager extends EventEmitter {
       lastActivityAt: now(),
       textChannelId: null,
       idleTimer: null,
+      diagnostics: {
+        timer: null,
+        inFlight: false,
+      },
     };
 
     player.on('tracksAdded', (tracks) => {
@@ -153,11 +161,15 @@ export class SessionManager extends EventEmitter {
     player.on('trackStart', (track) => {
       this._clearIdleTimer(session);
       this._resetVoteState(session, track?.id ?? null);
+      this._startPlaybackDiagnostics(session);
       this.touch(guildId);
       this.emit('trackStart', { session, track });
     });
 
     player.on('trackEnd', (event) => {
+      if (!this._isSessionPlaybackActive(session)) {
+        this._stopPlaybackDiagnostics(session);
+      }
       this.touch(guildId);
       this.emit('trackEnd', { session, ...event });
     });
@@ -168,6 +180,7 @@ export class SessionManager extends EventEmitter {
     });
 
     player.on('queueEmpty', () => {
+      this._stopPlaybackDiagnostics(session);
       this.touch(guildId);
       this._handleQueueEmpty(session).catch((err) => {
         this.logger?.warn?.('Queue empty handler failed', {
@@ -275,6 +288,7 @@ export class SessionManager extends EventEmitter {
     if (!session) return false;
 
     this.sessions.delete(guildId);
+    this._stopPlaybackDiagnostics(session);
     this._clearIdleTimer(session);
 
     try {
@@ -333,6 +347,12 @@ export class SessionManager extends EventEmitter {
     if (session.settings.stayInVoiceEnabled) return;
 
     session.idleTimer = setTimeout(async () => {
+      const currentSession = this.sessions.get(session.guildId);
+      if (currentSession && currentSession !== session) {
+        // Stale timer from an older session instance; ignore.
+        return;
+      }
+
       const active = this._isSessionPlaybackActive(session);
       const hasHumanListeners = this._hasHumanListeners(session);
       if (active || hasHumanListeners || session.settings.stayInVoiceEnabled) {
@@ -369,9 +389,91 @@ export class SessionManager extends EventEmitter {
     const channelId = String(session?.connection?.channelId ?? '').trim();
     if (!guildId || !channelId) return false;
 
+    const listeners = this._countHumanListeners(session);
+    return Number.isFinite(listeners) && listeners > 0;
+  }
+
+  _countHumanListeners(session) {
+    const store = this.voiceStateStore;
+    if (!store || typeof store.countUsersInChannel !== 'function') return 0;
+
+    const guildId = String(session?.guildId ?? '').trim();
+    const channelId = String(session?.connection?.channelId ?? '').trim();
+    if (!guildId || !channelId) return 0;
+
     const excluded = this.botUserId ? [this.botUserId] : [];
     const listeners = store.countUsersInChannel(guildId, channelId, excluded);
-    return Number.isFinite(listeners) && listeners > 0;
+    return Number.isFinite(listeners) ? listeners : 0;
+  }
+
+  _startPlaybackDiagnostics(session) {
+    if (!this.config.playbackDiagnosticsEnabled) return;
+    if (!session || session.diagnostics?.timer) return;
+
+    const diagnostics = session.diagnostics ?? { timer: null, inFlight: false };
+    session.diagnostics = diagnostics;
+
+    const intervalMs = Math.max(250, Number.parseInt(String(this.config.playbackDiagnosticsIntervalMs ?? 1000), 10) || 1000);
+    diagnostics.timer = setInterval(() => {
+      this._emitPlaybackDiagnosticsTick(session).catch(() => null);
+    }, intervalMs);
+    diagnostics.timer.unref?.();
+
+    this._emitPlaybackDiagnosticsTick(session).catch(() => null);
+  }
+
+  _stopPlaybackDiagnostics(session) {
+    const diagnostics = session?.diagnostics;
+    if (!diagnostics?.timer) return;
+
+    clearInterval(diagnostics.timer);
+    diagnostics.timer = null;
+    diagnostics.inFlight = false;
+  }
+
+  async _emitPlaybackDiagnosticsTick(session) {
+    if (!this.config.playbackDiagnosticsEnabled) return;
+    if (!session || !this.sessions.has(session.guildId)) return;
+
+    const diagnostics = session.diagnostics ?? { timer: null, inFlight: false };
+    session.diagnostics = diagnostics;
+
+    if (diagnostics.inFlight) return;
+    diagnostics.inFlight = true;
+
+    try {
+      const player = session.player;
+      const connection = session.connection;
+      const track = player?.currentTrack ?? null;
+      const playerDiagnostics = typeof player?.getDiagnostics === 'function'
+        ? player.getDiagnostics()
+        : (typeof player?.getState === 'function' ? player.getState() : null);
+      const voiceDiagnostics = typeof connection?.getDiagnostics === 'function'
+        ? await connection.getDiagnostics()
+        : {
+            connected: Boolean(connection?.connected),
+            isStreaming: Boolean(connection?.isStreaming),
+            channelId: connection?.channelId ?? null,
+          };
+
+      this.logger?.info?.('Playback diagnostics', {
+        guildId: session.guildId,
+        channelId: connection?.channelId ?? null,
+        listeners: this._countHumanListeners(session),
+        track: track
+          ? {
+              id: track.id ?? null,
+              title: track.title ?? null,
+              source: track.source ?? null,
+              url: track.url ?? null,
+            }
+          : null,
+        player: playerDiagnostics,
+        voice: voiceDiagnostics,
+      });
+    } finally {
+      diagnostics.inFlight = false;
+    }
   }
 
   _clearIdleTimer(session) {
