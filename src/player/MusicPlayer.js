@@ -383,6 +383,34 @@ function pickArtistName(track) {
   return null;
 }
 
+function pickTrackArtistFromMetadata(track) {
+  const nestedArtist = pickArtistName(track);
+  if (nestedArtist) return String(nestedArtist).trim();
+
+  const candidates = [
+    track?.artist,
+    track?.uploader,
+    track?.creator,
+    track?.channel?.name,
+    track?.channel?.title,
+    track?.channelName,
+    track?.ownerChannelName,
+    track?.author?.name,
+    track?.author,
+    track?.video_details?.channel?.name,
+    track?.video_details?.channel?.title,
+    track?.videoDetails?.channel?.name,
+    track?.videoDetails?.channel?.title,
+  ];
+
+  for (const candidate of candidates) {
+    const value = String(candidate ?? '').trim();
+    if (value) return value;
+  }
+
+  return null;
+}
+
 
 function isSoundCloudAuthorizationError(err) {
   const message = String(err?.message ?? err ?? '').toLowerCase();
@@ -1353,6 +1381,7 @@ export class MusicPlayer extends EventEmitter {
       thumbnailUrl: pickThumbnailUrlFromItem(item),
       requestedBy,
       source: 'youtube-search',
+      artist: pickTrackArtistFromMetadata(item),
     }));
   }
 
@@ -1400,6 +1429,7 @@ export class MusicPlayer extends EventEmitter {
       thumbnailUrl: normalizedThumbnailUrl,
       requestedBy,
       source: data?.source ?? 'stored',
+      artist: data?.artist ?? data?.artist_name ?? pickTrackArtistFromMetadata(data),
       soundcloudTrackId: data?.soundcloudTrackId ?? data?.soundcloud_track_id ?? null,
       audiusTrackId: data?.audiusTrackId ?? data?.audius_track_id ?? null,
       deezerTrackId: data?.deezerTrackId ?? data?.deezer_track_id ?? null,
@@ -1422,6 +1452,7 @@ export class MusicPlayer extends EventEmitter {
         thumbnailUrl: pickThumbnailUrlFromItem(info.video_details),
         requestedBy,
         source: 'youtube',
+        artist: pickTrackArtistFromMetadata(info.video_details),
       })];
     } catch {
       return [this._buildTrack({
@@ -1535,6 +1566,7 @@ export class MusicPlayer extends EventEmitter {
       thumbnailUrl: pickThumbnailUrlFromItem(video),
       requestedBy,
       source: 'youtube-playlist',
+      artist: pickTrackArtistFromMetadata(video),
     }));
   }
 
@@ -1590,6 +1622,7 @@ export class MusicPlayer extends EventEmitter {
         thumbnailUrl: pickThumbnailUrlFromItem(entry),
         requestedBy,
         source: 'youtube-playlist-ytdlp',
+        artist: pickTrackArtistFromMetadata(entry),
       }));
     }
 
@@ -3189,6 +3222,7 @@ export class MusicPlayer extends EventEmitter {
           url,
           duration: entry?.duration ?? null,
           thumbnailUrl: pickThumbnailUrlFromItem(entry),
+          artist: pickTrackArtistFromMetadata(entry),
         };
       })
       .filter(Boolean);
