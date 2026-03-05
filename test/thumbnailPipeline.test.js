@@ -49,3 +49,31 @@ test('createTrackFromData preserves explicit thumbnail URL', () => {
 
   assert.equal(track.thumbnailUrl, 'https://cdn.example.com/stored.jpg');
 });
+
+test('createTrackFromData resolves thumbnail from fallback metadata fields', () => {
+  const player = new MusicPlayer({}, { logger: null });
+  const track = player.createTrackFromData({
+    title: 'Stored with artwork',
+    url: 'https://example.com/audio',
+    duration: '2:03',
+    source: 'stored',
+    artwork_url: 'https://cdn.example.com/artwork.jpg',
+  }, 'user-3');
+
+  assert.equal(track.thumbnailUrl, 'https://cdn.example.com/artwork.jpg');
+});
+
+test('createTrackFromData resolves Deezer album cover fallback fields', () => {
+  const player = new MusicPlayer({}, { logger: null });
+  const track = player.createTrackFromData({
+    title: 'Stored Deezer Track',
+    url: 'https://www.deezer.com/track/123456',
+    duration: '2:03',
+    source: 'stored',
+    album: {
+      cover_xl: 'https://e-cdns-images.dzcdn.net/images/cover/abc123/1000x1000-000000-80-0-0.jpg',
+    },
+  }, 'user-4');
+
+  assert.equal(track.thumbnailUrl, 'https://e-cdns-images.dzcdn.net/images/cover/abc123/1000x1000-000000-80-0-0.jpg');
+});

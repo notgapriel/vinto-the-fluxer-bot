@@ -4,7 +4,7 @@ import { createCipheriv, createDecipheriv, createHash, getCiphers } from 'node:c
 import { copyFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { Readable, Transform } from 'node:stream';
+import { PassThrough, Transform } from 'node:stream';
 import ffmpegPath from 'ffmpeg-static';
 import { Blowfish } from 'egoroof-blowfish';
 import playdl from 'play-dl';
@@ -48,6 +48,10 @@ const DEEZER_MEDIA_QUALITY_MAP = new Map([
   ['MP3_256', 3],
   ['MP3_128', 1],
 ]);
+const DEEZER_STREAM_RETRY_LIMIT = 8;
+const DEEZER_STREAM_BASE_BACKOFF_MS = 250;
+const DEEZER_STREAM_MAX_BACKOFF_MS = 2_000;
+const DEEZER_STREAM_HIGH_WATER_MARK = 1 << 20;
 
 function md5Hex(value, encoding = 'ascii') {
   const hash = createHash('md5');
@@ -70,16 +74,20 @@ function getDeezerBlowfishKey(trackId) {
   return key;
 }
 
-function decryptDeezerChunk(chunk, blowfishKey) {
-  if (!DEEZER_BF_CBC_SUPPORTED) {
-    const cipher = new Blowfish(blowfishKey, Blowfish.MODE.CBC, Blowfish.PADDING.NULL);
-    cipher.setIv(DEEZER_BLOWFISH_IV);
-    return Buffer.from(cipher.decode(chunk, Blowfish.TYPE.UINT8_ARRAY));
+function createDeezerChunkDecryptor(blowfishKey) {
+  if (DEEZER_BF_CBC_SUPPORTED) {
+    return (chunk) => {
+      const decipher = createDecipheriv('bf-cbc', blowfishKey, DEEZER_BLOWFISH_IV);
+      decipher.setAutoPadding(false);
+      return Buffer.concat([decipher.update(chunk), decipher.final()]);
+    };
   }
 
-  const decipher = createDecipheriv('bf-cbc', blowfishKey, DEEZER_BLOWFISH_IV);
-  decipher.setAutoPadding(false);
-  return Buffer.concat([decipher.update(chunk), decipher.final()]);
+  const cipher = new Blowfish(blowfishKey, Blowfish.MODE.CBC, Blowfish.PADDING.NULL);
+  return (chunk) => {
+    cipher.setIv(DEEZER_BLOWFISH_IV);
+    return Buffer.from(cipher.decode(chunk, Blowfish.TYPE.UINT8_ARRAY));
+  };
 }
 
 function getDeezerSongFileName(track, quality) {
@@ -105,24 +113,95 @@ function buildDeezerLegacyDownloadUrl(track, quality) {
   return `http://e-cdn-proxy-${cdn}.deezer.com/mobile/1/${fileName}`;
 }
 
+function parseContentRangeStart(value) {
+  const raw = String(value ?? '').trim();
+  const match = raw.match(/^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i);
+  if (!match) return null;
+  const parsed = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed;
+}
+
+function isRetryableDeezerStreamError(err) {
+  const code = String(err?.code ?? '').trim().toUpperCase();
+  if (['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT'].includes(code)) {
+    return true;
+  }
+
+  const message = String(err?.message ?? err ?? '').toLowerCase();
+  return (
+    message.includes('socket hang up')
+    || message.includes('network')
+    || message.includes('connection reset')
+    || message.includes('body timeout')
+    || message.includes('fetch failed')
+    || message.includes('premature close')
+  );
+}
+
 class DeezerBfStripeDecryptTransform extends Transform {
   constructor(trackId) {
-    super();
+    super({
+      readableHighWaterMark: 1 << 20,
+      writableHighWaterMark: 1 << 20,
+    });
     this.trackId = String(trackId ?? '').trim();
     this.blowfishKey = getDeezerBlowfishKey(this.trackId);
-    this.pending = Buffer.alloc(0);
+    this.decryptChunk = createDeezerChunkDecryptor(this.blowfishKey);
+    this.pendingChunks = [];
+    this.pendingBytes = 0;
     this.blockIndex = 0;
+  }
+
+  _appendPendingChunk(chunk) {
+    if (!chunk || chunk.length === 0) return;
+    const normalized = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    this.pendingChunks.push(normalized);
+    this.pendingBytes += normalized.length;
+  }
+
+  _consumePendingStripe() {
+    if (this.pendingBytes < DEEZER_STRIPE_CHUNK_SIZE) return null;
+
+    const first = this.pendingChunks[0];
+    if (first.length === DEEZER_STRIPE_CHUNK_SIZE) {
+      this.pendingChunks.shift();
+      this.pendingBytes -= DEEZER_STRIPE_CHUNK_SIZE;
+      return first;
+    }
+
+    const stripe = Buffer.allocUnsafe(DEEZER_STRIPE_CHUNK_SIZE);
+    let offset = 0;
+
+    while (offset < DEEZER_STRIPE_CHUNK_SIZE && this.pendingChunks.length) {
+      const chunk = this.pendingChunks[0];
+      const remaining = DEEZER_STRIPE_CHUNK_SIZE - offset;
+      const toCopy = Math.min(remaining, chunk.length);
+      chunk.copy(stripe, offset, 0, toCopy);
+      offset += toCopy;
+
+      if (toCopy === chunk.length) {
+        this.pendingChunks.shift();
+      } else {
+        this.pendingChunks[0] = chunk.subarray(toCopy);
+      }
+    }
+
+    this.pendingBytes -= DEEZER_STRIPE_CHUNK_SIZE;
+    return stripe;
   }
 
   _transform(chunk, _encoding, callback) {
     try {
-      this.pending = this.pending.length ? Buffer.concat([this.pending, chunk]) : Buffer.from(chunk);
-      while (this.pending.length >= DEEZER_STRIPE_CHUNK_SIZE) {
-        const block = this.pending.subarray(0, DEEZER_STRIPE_CHUNK_SIZE);
-        this.pending = this.pending.subarray(DEEZER_STRIPE_CHUNK_SIZE);
+      this._appendPendingChunk(chunk);
+      while (this.pendingBytes >= DEEZER_STRIPE_CHUNK_SIZE) {
+        const block = this._consumePendingStripe();
+        if (!block || block.length !== DEEZER_STRIPE_CHUNK_SIZE) {
+          throw new Error('Invalid Deezer stripe block size.');
+        }
 
         if (this.blockIndex % 3 === 0) {
-          this.push(decryptDeezerChunk(block, this.blowfishKey));
+          this.push(this.decryptChunk(block));
         } else {
           this.push(block);
         }
@@ -135,11 +214,28 @@ class DeezerBfStripeDecryptTransform extends Transform {
   }
 
   _flush(callback) {
-    if (this.pending.length) {
-      this.push(this.pending);
-      this.pending = Buffer.alloc(0);
+    if (this.pendingBytes > 0) {
+      if (this.pendingChunks.length === 1) {
+        this.push(this.pendingChunks[0]);
+      } else {
+        const remainder = Buffer.allocUnsafe(this.pendingBytes);
+        let offset = 0;
+        for (const part of this.pendingChunks) {
+          part.copy(remainder, offset);
+          offset += part.length;
+        }
+        this.push(remainder);
+      }
+      this.pendingChunks = [];
+      this.pendingBytes = 0;
     }
     callback();
+  }
+
+  _destroy(err, callback) {
+    this.pendingChunks = [];
+    this.pendingBytes = 0;
+    callback(err);
   }
 }
 
@@ -570,10 +666,28 @@ function pickThumbnailUrlFromItem(item) {
     item.artworkUrl,
     item.cover_url,
     item.coverUrl,
+    item.cover_xl,
+    item.cover_big,
+    item.cover_medium,
+    item.cover_small,
     item.artwork?.url,
     item.artwork?.['1000x1000'],
     item.artwork?.['480x480'],
     item.artwork?.['150x150'],
+    item.picture_xl,
+    item.picture_big,
+    item.picture_medium,
+    item.picture_small,
+    item.album?.cover_xl,
+    item.album?.cover_big,
+    item.album?.cover_medium,
+    item.album?.cover_small,
+    item.album?.cover,
+    item.artist?.picture_xl,
+    item.artist?.picture_big,
+    item.artist?.picture_medium,
+    item.artist?.picture_small,
+    item.artist?.picture,
     item.profile_picture?.['1000x1000'],
     item.profile_picture?.['480x480'],
     item.profile_picture?.['150x150'],
@@ -1368,11 +1482,18 @@ export class MusicPlayer extends EventEmitter {
   }
 
   createTrackFromData(data, requestedBy = null) {
+    const normalizedThumbnailUrl = (
+      data?.thumbnailUrl
+      ?? data?.thumbnail_url
+      ?? data?.thumbnail
+      ?? pickThumbnailUrlFromItem(data)
+    );
+
     return this._buildTrack({
       title: data?.title,
       url: data?.url,
       duration: data?.duration,
-      thumbnailUrl: data?.thumbnailUrl ?? data?.thumbnail_url ?? data?.thumbnail,
+      thumbnailUrl: normalizedThumbnailUrl,
       requestedBy,
       source: data?.source ?? 'stored',
       soundcloudTrackId: data?.soundcloudTrackId ?? data?.soundcloud_track_id ?? null,
@@ -2320,30 +2441,145 @@ export class MusicPlayer extends EventEmitter {
     throw new Error('No playable Deezer full stream URL available.');
   }
 
-  async _startDeezerEncryptedPipeline(streamUrl, trackId, seekSec = 0) {
+  async _sleep(ms) {
+    const waitMs = Math.max(0, Number.parseInt(String(ms), 10) || 0);
+    if (waitMs <= 0) return;
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+
+  async _openDeezerStreamConnection(streamUrl, offset = 0) {
     const headers = { accept: '*/*' };
     if (this.deezerArl) {
       headers.cookie = this._getDeezerCookieHeader();
     }
 
-    const connectAbort = new AbortController();
-    const connectTimeout = setTimeout(() => {
-      connectAbort.abort(new Error('Timed out while connecting to Deezer stream.'));
-    }, 15_000);
+    const safeOffset = Math.max(0, Number.parseInt(String(offset), 10) || 0);
+    if (safeOffset > 0) {
+      headers.range = `bytes=${safeOffset}-`;
+    }
 
     const response = await fetch(streamUrl, {
       method: 'GET',
       headers,
-      signal: connectAbort.signal,
+      signal: AbortSignal.timeout(15_000),
     }).catch(() => null);
-    clearTimeout(connectTimeout);
 
     if (!response?.ok || !response.body) {
       throw new Error(`Failed to fetch encrypted Deezer stream (${response?.status ?? 'network'})`);
     }
     this._updateDeezerCookieHeader(response);
 
-    const rawStream = Readable.fromWeb(response.body);
+    if (safeOffset > 0) {
+      if (response.status !== 206) {
+        throw new Error(`Deezer stream did not honor range resume (status ${response.status}).`);
+      }
+
+      const rangeStart = parseContentRangeStart(response.headers.get('content-range'));
+      if (rangeStart == null || rangeStart !== safeOffset) {
+        throw new Error(`Deezer stream resumed at unexpected offset (${rangeStart ?? 'unknown'} != ${safeOffset}).`);
+      }
+    }
+
+    return response;
+  }
+
+  _createDeezerResilientReadable(streamUrl) {
+    const out = new PassThrough({
+      highWaterMark: DEEZER_STREAM_HIGH_WATER_MARK,
+    });
+
+    let offset = 0;
+    let attempts = 0;
+    let closed = false;
+    let activeReader = null;
+
+    const onClose = () => {
+      closed = true;
+      try {
+        activeReader?.cancel?.();
+      } catch {
+        // ignore reader cancel errors
+      }
+    };
+    out.once('close', onClose);
+    out.once('error', onClose);
+
+    const run = async () => {
+      while (!closed) {
+        let response;
+        try {
+          response = await this._openDeezerStreamConnection(streamUrl, offset);
+        } catch (err) {
+          if (!isRetryableDeezerStreamError(err) || attempts >= DEEZER_STREAM_RETRY_LIMIT) {
+            out.destroy(err instanceof Error ? err : new Error(String(err)));
+            return;
+          }
+
+          const backoffMs = Math.min(
+            DEEZER_STREAM_MAX_BACKOFF_MS,
+            DEEZER_STREAM_BASE_BACKOFF_MS * (2 ** attempts)
+          );
+          attempts += 1;
+          await this._sleep(backoffMs);
+          continue;
+        }
+
+        attempts = 0;
+        activeReader = response.body?.getReader?.() ?? null;
+        if (!activeReader) {
+          out.destroy(new Error('Encrypted Deezer response body is not readable.'));
+          return;
+        }
+
+        try {
+          while (!closed) {
+            const { done, value } = await activeReader.read();
+            if (done) {
+              out.end();
+              return;
+            }
+
+            if (!value || value.length === 0) continue;
+            offset += value.length;
+
+            if (!out.write(Buffer.from(value))) {
+              await new Promise((resolve) => out.once('drain', resolve));
+            }
+          }
+        } catch (err) {
+          if (closed) return;
+
+          if (!isRetryableDeezerStreamError(err) || attempts >= DEEZER_STREAM_RETRY_LIMIT) {
+            out.destroy(err instanceof Error ? err : new Error(String(err)));
+            return;
+          }
+
+          const backoffMs = Math.min(
+            DEEZER_STREAM_MAX_BACKOFF_MS,
+            DEEZER_STREAM_BASE_BACKOFF_MS * (2 ** attempts)
+          );
+          attempts += 1;
+          await this._sleep(backoffMs);
+        } finally {
+          try {
+            activeReader?.releaseLock?.();
+          } catch {
+            // ignore reader release errors
+          }
+          activeReader = null;
+        }
+      }
+    };
+
+    run().catch((err) => {
+      out.destroy(err instanceof Error ? err : new Error(String(err)));
+    });
+
+    return out;
+  }
+
+  async _startDeezerEncryptedPipeline(streamUrl, trackId, seekSec = 0) {
+    const rawStream = this._createDeezerResilientReadable(streamUrl);
     const decryptStream = new DeezerBfStripeDecryptTransform(trackId);
     this.sourceStream = rawStream;
     this.deezerDecryptStream = decryptStream;
@@ -2966,13 +3202,16 @@ export class MusicPlayer extends EventEmitter {
     }
   }
 
-  _ffmpegArgs(seekSec = 0) {
+  _ffmpegArgs(seekSec = 0, options = {}) {
     const normalizedVolume = clamp(this.volumePercent, this.minVolumePercent, this.maxVolumePercent);
     const volumeFactor = (normalizedVolume / 100).toFixed(2);
     const filterChain = this._buildAudioFilterChain(volumeFactor);
     const seek = Math.max(0, Number.parseInt(String(seekSec), 10) || 0);
+    const realtimeInput = options?.realtimeInput === true;
 
     const args = [
+      ...(realtimeInput ? ['-re'] : []),
+      '-thread_queue_size', '4096',
       '-i', 'pipe:0',
     ];
 

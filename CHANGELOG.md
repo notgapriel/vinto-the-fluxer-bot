@@ -17,6 +17,15 @@ All notable changes to this project are documented in this file.
 - Bot reply media UX:
   - added optional embed thumbnail/image options in responder and router reply plumbing
   - now includes track thumbnails in `play`, `playnext`, `pick`, and automatic `Now playing` responses
+- Deezer playback stability and diagnostics:
+  - optimized Deezer stripe decryption transform to reduce buffer churn and CPU spikes
+  - added Deezer encrypted stream resume/retry with byte-range reconnect support
+  - improved voice pump buffering with adaptive target queue and startup prefill
+  - added short concealment-frame handling for micro-gaps to reduce audible stalls
+  - added owner-only diagnostics command `diag` with snapshot and full-track summary modes
+- Docs refresh:
+  - aligned README/architecture/privacy/terms wording with current bot behavior and naming
+  - documented current Spotify status (`Spotify support is coming soon.`)
 
 ## [0.3.0] - 2026-03-04
 

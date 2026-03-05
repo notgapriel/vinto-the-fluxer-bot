@@ -156,6 +156,7 @@ export class CommandRouter {
     this.sessionPanelReactions = new Set();
     this.sessionPanelLiveLastAt = new Map();
     this.sessionPanelLastPayloadByGuild = new Map();
+    this.sessionPanelUpdateInFlightByGuild = new Map();
     this.sessionPanelLiveHandle = null;
     this.weeklySweepHandle = null;
     this.commandRateLimiter = options.commandRateLimiter ?? new CommandRateLimiter({
@@ -588,82 +589,104 @@ export class CommandRouter {
   }
 
   async _sendSessionPanelUpdate(session, reason = 'update') {
-    if (!this.library) return;
     const guildId = session?.guildId;
-    if (!guildId) return;
+    if (!this.library || !guildId) return;
 
-    const features = await this.library.getGuildFeatureConfig(guildId).catch(() => null);
-    if (!features) return;
+    return this._withSessionPanelUpdateLock(guildId, async () => {
+      const features = await this.library.getGuildFeatureConfig(guildId).catch(() => null);
+      if (!features) return;
 
-    const channelId = features.sessionPanelChannelId ?? session.textChannelId ?? session.settings.musicLogChannelId ?? null;
-    if (!channelId) return;
+      const channelId = features.sessionPanelChannelId ?? session.textChannelId ?? session.settings.musicLogChannelId ?? null;
+      if (!channelId) return;
 
-    const current = session.player.currentTrack;
-    const totalSec = parseDurationToSeconds(current?.duration ?? '');
-    const progressSec = session.player.getProgressSeconds();
-    const progressLabel = buildProgressBar(progressSec, totalSec ?? Number.NaN);
-    const queueCount = session.player.pendingTracks.length;
-    const votes = this.sessions.getVoteCount(guildId);
-    const voteNeed = this._computeVoteSkipRequirement(guildId, session);
-    const controlsLabel = 'React with \u2705 or \u23ED\uFE0F to vote-skip, \u2764\uFE0F to favorite, \u23F8\uFE0F to pause, \u25B6\uFE0F to resume';
-    const panelDescription = current ? `Now: ${summarizeTrack(current)}` : 'Now: idle';
-    const payloadDigest = JSON.stringify({
-      description: panelDescription,
-      progress: progressLabel,
-      queue: queueCount,
-      voteskip: `${votes}/${voteNeed}`,
-      reason,
-      controls: controlsLabel,
+      const current = session.player.currentTrack;
+      const totalSec = parseDurationToSeconds(current?.duration ?? '');
+      const progressSec = session.player.getProgressSeconds();
+      const progressLabel = buildProgressBar(progressSec, totalSec ?? Number.NaN);
+      const queueCount = session.player.pendingTracks.length;
+      const votes = this.sessions.getVoteCount(guildId);
+      const voteNeed = this._computeVoteSkipRequirement(guildId, session);
+      const controlsLabel = 'React with \u2705 or \u23ED\uFE0F to vote-skip, \u2764\uFE0F to favorite, \u23F8\uFE0F to pause, \u25B6\uFE0F to resume';
+      const panelDescription = current ? `Now: ${summarizeTrack(current)}` : 'Now: idle';
+      const payloadDigest = JSON.stringify({
+        description: panelDescription,
+        progress: progressLabel,
+        queue: queueCount,
+        voteskip: `${votes}/${voteNeed}`,
+        reason,
+        controls: controlsLabel,
+      });
+      const digestKey = String(guildId);
+      if (features.sessionPanelMessageId && this.sessionPanelLastPayloadByGuild.get(digestKey) === payloadDigest) {
+        return;
+      }
+
+      const payload = {
+        embeds: [
+          buildEmbed({
+            title: 'Session Panel',
+            description: panelDescription,
+            thumbnailUrl: current?.thumbnailUrl ?? null,
+            fields: [
+              { name: 'Progress', value: progressLabel },
+              { name: 'Queue', value: `${queueCount} track(s)`, inline: true },
+              { name: 'Voteskip', value: `${votes}/${voteNeed}`, inline: true },
+              { name: 'Reason', value: reason, inline: true },
+              { name: 'Controls', value: controlsLabel },
+            ],
+          }),
+        ],
+        allowed_mentions: {
+          parse: [],
+          users: [],
+          roles: [],
+          replied_user: false,
+        },
+      };
+
+      if (features.sessionPanelMessageId && this.rest?.editMessage) {
+        try {
+          await this.rest.editMessage(channelId, features.sessionPanelMessageId, payload);
+          await this._ensureSessionPanelReactions(channelId, features.sessionPanelMessageId);
+          this.sessionPanelLastPayloadByGuild.set(digestKey, payloadDigest);
+          return;
+        } catch {
+          // If the old panel message is gone/uneditable, fall through and create a new one.
+        }
+      }
+
+      const sent = await this.rest.sendMessage(channelId, payload).catch(() => null);
+      const messageId = sent?.id ?? sent?.message?.id ?? null;
+      if (!messageId) return;
+      await this._ensureSessionPanelReactions(channelId, messageId);
+      this.sessionPanelLastPayloadByGuild.set(digestKey, payloadDigest);
+
+      await this.library.patchGuildFeatureConfig(guildId, {
+        sessionPanelChannelId: channelId,
+        sessionPanelMessageId: String(messageId),
+      }).catch(() => null);
     });
-    const digestKey = String(guildId);
-    if (features.sessionPanelMessageId && this.sessionPanelLastPayloadByGuild.get(digestKey) === payloadDigest) {
-      return;
+  }
+
+  async _withSessionPanelUpdateLock(guildId, fn) {
+    const key = String(guildId ?? '').trim();
+    if (!key) return fn();
+
+    const active = this.sessionPanelUpdateInFlightByGuild.get(key);
+    if (active) {
+      await active.catch(() => null);
     }
 
-    const payload = {
-      embeds: [
-        buildEmbed({
-          title: 'Session Panel',
-          description: panelDescription,
-          thumbnailUrl: current?.thumbnailUrl ?? null,
-          fields: [
-            { name: 'Progress', value: progressLabel },
-            { name: 'Queue', value: `${queueCount} track(s)`, inline: true },
-            { name: 'Voteskip', value: `${votes}/${voteNeed}`, inline: true },
-            { name: 'Reason', value: reason, inline: true },
-            { name: 'Controls', value: controlsLabel },
-          ],
-        }),
-      ],
-      allowed_mentions: {
-        parse: [],
-        users: [],
-        roles: [],
-        replied_user: false,
-      },
-    };
-
-    if (features.sessionPanelMessageId && this.rest?.editMessage) {
-      try {
-        await this.rest.editMessage(channelId, features.sessionPanelMessageId, payload);
-        await this._ensureSessionPanelReactions(channelId, features.sessionPanelMessageId);
-        this.sessionPanelLastPayloadByGuild.set(digestKey, payloadDigest);
-        return;
-      } catch {
-        // If the old panel message is gone/uneditable, fall through and create a new one.
+    const current = (async () => fn())();
+    this.sessionPanelUpdateInFlightByGuild.set(key, current);
+    try {
+      return await current;
+    } finally {
+      const latest = this.sessionPanelUpdateInFlightByGuild.get(key);
+      if (latest === current) {
+        this.sessionPanelUpdateInFlightByGuild.delete(key);
       }
     }
-
-    const sent = await this.rest.sendMessage(channelId, payload).catch(() => null);
-    const messageId = sent?.id ?? sent?.message?.id ?? null;
-    if (!messageId) return;
-    await this._ensureSessionPanelReactions(channelId, messageId);
-    this.sessionPanelLastPayloadByGuild.set(digestKey, payloadDigest);
-
-    await this.library.patchGuildFeatureConfig(guildId, {
-      sessionPanelChannelId: channelId,
-      sessionPanelMessageId: String(messageId),
-    }).catch(() => null);
   }
 
   async _ensureSessionPanelReactions(channelId, messageId) {
