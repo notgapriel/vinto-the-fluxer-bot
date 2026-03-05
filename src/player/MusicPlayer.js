@@ -570,10 +570,28 @@ function pickThumbnailUrlFromItem(item) {
     item.artworkUrl,
     item.cover_url,
     item.coverUrl,
+    item.cover_xl,
+    item.cover_big,
+    item.cover_medium,
+    item.cover_small,
     item.artwork?.url,
     item.artwork?.['1000x1000'],
     item.artwork?.['480x480'],
     item.artwork?.['150x150'],
+    item.picture_xl,
+    item.picture_big,
+    item.picture_medium,
+    item.picture_small,
+    item.album?.cover_xl,
+    item.album?.cover_big,
+    item.album?.cover_medium,
+    item.album?.cover_small,
+    item.album?.cover,
+    item.artist?.picture_xl,
+    item.artist?.picture_big,
+    item.artist?.picture_medium,
+    item.artist?.picture_small,
+    item.artist?.picture,
     item.profile_picture?.['1000x1000'],
     item.profile_picture?.['480x480'],
     item.profile_picture?.['150x150'],
@@ -1368,11 +1386,18 @@ export class MusicPlayer extends EventEmitter {
   }
 
   createTrackFromData(data, requestedBy = null) {
+    const normalizedThumbnailUrl = (
+      data?.thumbnailUrl
+      ?? data?.thumbnail_url
+      ?? data?.thumbnail
+      ?? pickThumbnailUrlFromItem(data)
+    );
+
     return this._buildTrack({
       title: data?.title,
       url: data?.url,
       duration: data?.duration,
-      thumbnailUrl: data?.thumbnailUrl ?? data?.thumbnail_url ?? data?.thumbnail,
+      thumbnailUrl: normalizedThumbnailUrl,
       requestedBy,
       source: data?.source ?? 'stored',
       soundcloudTrackId: data?.soundcloudTrackId ?? data?.soundcloud_track_id ?? null,
