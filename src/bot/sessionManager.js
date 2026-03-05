@@ -154,11 +154,13 @@ export class SessionManager extends EventEmitter {
     };
 
     player.on('tracksAdded', (tracks) => {
+      if (this.sessions.get(guildId) !== session) return;
       this.touch(guildId);
       this.emit('tracksAdded', { session, tracks });
     });
 
     player.on('trackStart', (track) => {
+      if (this.sessions.get(guildId) !== session) return;
       this._clearIdleTimer(session);
       this._resetVoteState(session, track?.id ?? null);
       this._startPlaybackDiagnostics(session);
@@ -167,6 +169,7 @@ export class SessionManager extends EventEmitter {
     });
 
     player.on('trackEnd', (event) => {
+      if (this.sessions.get(guildId) !== session) return;
       if (!this._isSessionPlaybackActive(session)) {
         this._stopPlaybackDiagnostics(session);
       }
@@ -175,11 +178,13 @@ export class SessionManager extends EventEmitter {
     });
 
     player.on('trackError', ({ track, error }) => {
+      if (this.sessions.get(guildId) !== session) return;
       this.touch(guildId);
       this.emit('trackError', { session, track, error });
     });
 
     player.on('queueEmpty', () => {
+      if (this.sessions.get(guildId) !== session) return;
       this._stopPlaybackDiagnostics(session);
       this.touch(guildId);
       this._handleQueueEmpty(session).catch((err) => {

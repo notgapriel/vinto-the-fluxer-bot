@@ -781,6 +781,7 @@ export class MusicPlayer extends EventEmitter {
     this.currentTrackOffsetSec = 0;
     this.lastKnownTrack = null;
     this.lastKnownTrackAtMs = 0;
+    this.activePlaybackToken = 0;
     this.soundcloudClientIdResolvedAt = this.soundcloudClientId ? Date.now() : 0;
 
     this._lastYtDlpDiagnostics = null;
@@ -1150,6 +1151,7 @@ export class MusicPlayer extends EventEmitter {
       this.emit('queueEmpty');
       return;
     }
+    const playbackToken = ++this.activePlaybackToken;
 
     this.playing = true;
     this.paused = false;
@@ -1178,7 +1180,7 @@ export class MusicPlayer extends EventEmitter {
       this.logger?.info?.('Playback started', { title: track.title, url: track.url, seek: track.seekStartSec ?? 0 });
 
       this.ffmpeg.once('close', async (code, signal) => {
-        await this._handleTrackClose(track, code, signal);
+        await this._handleTrackClose(track, code, signal, playbackToken);
       });
     } catch (err) {
       const normalized = this._normalizePlaybackError(err);
@@ -1284,7 +1286,16 @@ export class MusicPlayer extends EventEmitter {
     this._resetPlaybackClock();
   }
 
-  async _handleTrackClose(track, code, signal) {
+  async _handleTrackClose(track, code, signal, playbackToken = null) {
+    if (playbackToken != null && playbackToken !== this.activePlaybackToken) {
+      this.logger?.debug?.('Ignoring stale track close event', {
+        title: track?.title ?? null,
+        token: playbackToken,
+        activeToken: this.activePlaybackToken,
+      });
+      return;
+    }
+
     const wasSkip = this.skipRequested;
     const pendingSeekTrack = this.pendingSeekTrack;
     this.pendingSeekTrack = null;

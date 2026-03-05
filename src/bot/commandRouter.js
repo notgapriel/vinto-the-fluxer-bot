@@ -544,6 +544,9 @@ export class CommandRouter {
     });
 
     this.sessions.on('queueEmpty', async ({ session }) => {
+      const activeSession = this.sessions.get(session?.guildId);
+      if (activeSession && activeSession !== session) return;
+
       const channelId = this._resolveEventChannelId(session);
       if (!channelId) return;
 
