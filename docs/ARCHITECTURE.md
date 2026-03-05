@@ -37,7 +37,13 @@ The player resolves input in this order:
 3. Provider-specific fallback by URL pattern
 4. Generic URL fallback path
 
-Cross-provider imports (Spotify/Deezer/SoundCloud) are mapped to playable YouTube results so playback remains consistent in one voice pipeline.
+Playback path notes:
+
+- Deezer: direct media URL resolution with encrypted-stream handling and resume/retry fallback.
+- SoundCloud: direct API/transcoding playback path.
+- Audius: direct API playback path.
+- Spotify: currently disabled and returns `Spotify support is coming soon.`.
+- Generic fallback resolution can still map to YouTube search when a provider URL cannot be resolved directly.
 
 ## Data Model Notes
 

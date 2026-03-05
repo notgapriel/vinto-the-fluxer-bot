@@ -2,7 +2,7 @@
 
 ## Where To Ask
 
-- Realtime support server: https://fluxer.gg/qDoq4Tf0
+- Realtime support server (Vinto): https://fluxer.gg/qDoq4Tf0
 - Usage questions: open a GitHub Discussion or Issue.
 - Confirmed bugs: open a Bug Report issue using the template.
 - Security concerns: follow [SECURITY.md](SECURITY.md) and report privately.

@@ -1,15 +1,15 @@
-# Fluxer Music Bot
+# Vinto Music Bot
 
-Robust, self-hostable music bot for Fluxer with resilient gateway handling, queue/session safety, and persistent guild-level music data.
+Robust, self-hostable music bot with resilient gateway handling, queue/session safety, and persistent guild-level music data.
 
 [![Invite Bot](https://img.shields.io/badge/Invite-Hosted%20Bot-ff2d78?style=for-the-badge)](https://web.fluxer.app/oauth2/authorize?client_id=1474774210677452817&scope=bot&permissions=3525696)
-[![Support Server](https://img.shields.io/badge/Support-Fluxer%20Server-2ea44f?style=for-the-badge)](https://fluxer.gg/iXnSOr8l)
+[![Support Server](https://img.shields.io/badge/Support-Vinto%20Server-2ea44f?style=for-the-badge)](https://fluxer.gg/qDoq4Tf0)
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Q5Q31VDH1Z)
 
 ## Why This Project
 
 - Production-minded architecture (reconnect/resume, retries, graceful shutdown).
-- Source ingestion from YouTube, SoundCloud, Spotify URLs, and Deezer URLs.
+- Source ingestion from YouTube/SoundCloud/Deezer URLs.
 - Persistent playlists, favorites, and history backed by MongoDB.
 - Built-in monitoring endpoints and optional Sentry integration.
 - Command system designed for long-term maintainability.
@@ -18,7 +18,9 @@ Robust, self-hostable music bot for Fluxer with resilient gateway handling, queu
 
 - Reliable connectivity: gateway heartbeat watchdog, reconnect backoff, session resume, hardened REST retries and `429` handling.
 - Music playback: queue management, play-next, seek, history, loop, shuffle, filters, EQ, DJ role controls, and vote-skip for shared voice channels.
-- URL import: Spotify/Deezer/SoundCloud links resolved to playable YouTube tracks.
+- URL import:
+  - Deezer and SoundCloud can use direct playback paths.
+  - Spotify commands are currently disabled with `Spotify support is coming soon.`.
 - Persistence: guild config store with cache + MongoDB, plus guild playlists, user favorites, and playback history.
 - Operations: `/healthz`, `/readyz`, `/metrics`, structured logging, and optional Sentry exception reporting.
 
@@ -108,6 +110,7 @@ Advanced:
 
 - `mood`, `panel`, `musicwebhook`, `queueguard`, `template`, `charts`, `recap`
 - `voiceprofile`, `reputation`, `taste`, `handoff`, `party`, `import`
+- `diag [now|last|track|cancel]` (owner-only diagnostics command)
 
 ## Architecture
 
@@ -126,7 +129,7 @@ Key modules:
 ## Operations Notes
 
 - If YouTube returns a bot-check challenge, use `YTDLP_COOKIES_FILE` or `YTDLP_COOKIES_FROM_BROWSER`.
-- If Spotify URL imports fail, verify `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REFRESH_TOKEN`.
+- Spotify URL imports are currently disabled and return `Spotify support is coming soon.`.
 - If SoundCloud URL imports fail, set `SOUNDCLOUD_CLIENT_ID` or keep `SOUNDCLOUD_AUTO_CLIENT_ID=1`.
 - Guild configuration data is stored in collection `guild_configs`.
 

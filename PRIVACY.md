@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Last updated: February 21, 2026
+Last updated: March 5, 2026
 
 ## Data We Process
 
@@ -8,7 +8,7 @@ This bot processes and stores the minimum data required to provide music feature
 
 - Guild/server configuration:
   - command prefix
-  - playback settings (autoplay, dedupe, 24/7, vote-skip)
+  - playback settings (dedupe, 24/7, vote-skip)
   - DJ role ids
   - optional music log channel id
 - User and guild music data:

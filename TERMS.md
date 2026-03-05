@@ -1,6 +1,6 @@
 # Terms of Service
 
-Last updated: February 21, 2026
+Last updated: March 5, 2026
 
 ## Acceptance
 
@@ -10,7 +10,7 @@ By using this bot, you agree to these terms.
 
 - Do not use the bot for unlawful activity.
 - Do not abuse, spam, or intentionally overload the bot.
-- Respect third-party platform terms (Fluxer, content providers, APIs).
+- Respect third-party platform terms (Discord, content providers, APIs).
 
 ## Availability
 
