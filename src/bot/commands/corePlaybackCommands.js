@@ -330,16 +330,11 @@ registry.register(createCommand({
         }
 
         if (added.length === 1) {
-          await ctx.reply.success(
-            `Added to queue: ${trackLabel(added[0])}`,
-            null,
-            { thumbnailUrl: added[0]?.thumbnailUrl ?? null }
-          );
+          await ctx.reply.success(`Added to queue: ${trackLabel(added[0])}`);
         } else {
           await ctx.reply.success(
             `Added **${added.length}** tracks from playlist.`,
-            [{ name: 'First Track', value: trackLabel(added[0]) }],
-            { thumbnailUrl: added[0]?.thumbnailUrl ?? null }
+            [{ name: 'First Track', value: trackLabel(added[0]) }]
           );
         }
       });
@@ -387,17 +382,9 @@ registry.register(createCommand({
         }
 
         if (added.length === 1) {
-          await ctx.reply.success(
-            `Queued next: ${trackLabel(added[0])}`,
-            null,
-            { thumbnailUrl: added[0]?.thumbnailUrl ?? null }
-          );
+          await ctx.reply.success(`Queued next: ${trackLabel(added[0])}`);
         } else {
-          await ctx.reply.success(
-            `Queued **${added.length}** playlist tracks at the front.`,
-            null,
-            { thumbnailUrl: added[0]?.thumbnailUrl ?? null }
-          );
+          await ctx.reply.success(`Queued **${added.length}** playlist tracks at the front.`);
         }
       });
     },
@@ -493,11 +480,7 @@ registry.register(createCommand({
         }
 
         clearSearchSelection(ctx);
-        await ctx.reply.success(
-          `Added to queue: ${trackLabel(added[0])}`,
-          null,
-          { thumbnailUrl: added[0]?.thumbnailUrl ?? null }
-        );
+        await ctx.reply.success(`Added to queue: ${trackLabel(added[0])}`);
       });
     },
   }));

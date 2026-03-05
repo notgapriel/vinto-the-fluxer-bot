@@ -20,6 +20,158 @@ import {
   formatUptimeCompact,
 } from './commandHelpers.js';
 
+const DIAG_OWNER_USER_ID = '1474761291856015469';
+const diagSnapshotsByGuild = new Map();
+const diagTrackMonitorsByGuild = new Map();
+
+function ensureDiagOwner(ctx) {
+  const userId = String(ctx?.authorId ?? '').trim();
+  if (userId === DIAG_OWNER_USER_ID) return;
+  throw new ValidationError('This command is restricted to the bot owner.');
+}
+
+function toFixedSafe(value, digits = 2) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 'n/a';
+  return parsed.toFixed(digits);
+}
+
+function buildDiagSnapshot(session, playerDiagnostics, voiceDiagnostics) {
+  const nowTs = Date.now();
+  const pump = voiceDiagnostics?.pump ?? null;
+  const transport = voiceDiagnostics?.transport ?? null;
+  const framesCaptured = Number.parseInt(String(pump?.framesCaptured ?? 0), 10) || 0;
+  const producedPcmMs = framesCaptured * 20;
+  const pumpUptimeSec = Number.parseInt(String(pump?.uptimeSec ?? 0), 10) || 0;
+  const wallClockMs = Math.max(0, pumpUptimeSec * 1000);
+  const paceRatio = wallClockMs > 0 ? producedPcmMs / wallClockMs : null;
+
+  return {
+    capturedAt: nowTs,
+    track: session?.player?.currentTrack
+      ? {
+          id: session.player.currentTrack.id ?? null,
+          title: session.player.currentTrack.title ?? null,
+          source: session.player.currentTrack.source ?? null,
+        }
+      : null,
+    player: playerDiagnostics ?? null,
+    voice: voiceDiagnostics ?? null,
+    computed: {
+      producedPcmMs,
+      wallClockMs,
+      paceRatio,
+      backpressureWaits: Number.parseInt(String(pump?.backpressureWaits ?? 0), 10) || 0,
+      concealedFrames: Number.parseInt(String(pump?.concealedFrames ?? 0), 10) || 0,
+      queueDepthMs: Number(voiceDiagnostics?.queuedDurationMs ?? Number.NaN),
+      jitterMs: Number(transport?.jitterMs ?? Number.NaN),
+      rttMs: Number(transport?.roundTripTimeMs ?? Number.NaN),
+      outboundBitrateKbps: Number(transport?.outboundBitrateKbps ?? Number.NaN),
+    },
+  };
+}
+
+function describeDiagStatus(snapshot) {
+  const ratio = Number(snapshot?.computed?.paceRatio ?? Number.NaN);
+  const queueDepth = Number(snapshot?.computed?.queueDepthMs ?? Number.NaN);
+  const backpressureWaits = Number.parseInt(String(snapshot?.computed?.backpressureWaits ?? 0), 10) || 0;
+
+  const flags = [];
+  if (Number.isFinite(ratio) && ratio > 1.03) {
+    flags.push('catch-up-speed');
+  }
+  if (Number.isFinite(queueDepth) && queueDepth < 40) {
+    flags.push('low-buffer');
+  }
+  if (backpressureWaits > 0) {
+    flags.push('backpressure');
+  }
+  return flags.length ? flags.join(', ') : 'ok';
+}
+
+function createTrackDiagAggregate(track) {
+  return {
+    startedAt: Date.now(),
+    endedAt: null,
+    trackId: track?.id ?? null,
+    trackTitle: track?.title ?? 'Unknown',
+    trackSource: track?.source ?? 'unknown',
+    samples: 0,
+    lowBufferSamples: 0,
+    catchupSamples: 0,
+    okSamples: 0,
+    backpressureMax: 0,
+    backpressureTotal: 0,
+    concealedFramesMax: 0,
+    concealedFramesTotal: 0,
+    queueDepthMinMs: Number.POSITIVE_INFINITY,
+    queueDepthMaxMs: 0,
+    queueDepthSumMs: 0,
+    paceMin: Number.POSITIVE_INFINITY,
+    paceMax: 0,
+    paceSum: 0,
+    paceCount: 0,
+  };
+}
+
+function addTrackDiagSample(aggregate, snapshot) {
+  aggregate.samples += 1;
+
+  const queueDepth = Number(snapshot?.computed?.queueDepthMs ?? Number.NaN);
+  if (Number.isFinite(queueDepth) && queueDepth >= 0) {
+    aggregate.queueDepthMinMs = Math.min(aggregate.queueDepthMinMs, queueDepth);
+    aggregate.queueDepthMaxMs = Math.max(aggregate.queueDepthMaxMs, queueDepth);
+    aggregate.queueDepthSumMs += queueDepth;
+  }
+
+  const pace = Number(snapshot?.computed?.paceRatio ?? Number.NaN);
+  if (Number.isFinite(pace) && pace > 0) {
+    aggregate.paceMin = Math.min(aggregate.paceMin, pace);
+    aggregate.paceMax = Math.max(aggregate.paceMax, pace);
+    aggregate.paceSum += pace;
+    aggregate.paceCount += 1;
+  }
+
+  const backpressure = Number.parseInt(String(snapshot?.computed?.backpressureWaits ?? 0), 10) || 0;
+  aggregate.backpressureMax = Math.max(aggregate.backpressureMax, backpressure);
+  aggregate.backpressureTotal += backpressure;
+  const concealedFrames = Number.parseInt(String(snapshot?.computed?.concealedFrames ?? 0), 10) || 0;
+  aggregate.concealedFramesMax = Math.max(aggregate.concealedFramesMax, concealedFrames);
+  aggregate.concealedFramesTotal += concealedFrames;
+
+  const status = describeDiagStatus(snapshot);
+  if (status.includes('low-buffer')) {
+    aggregate.lowBufferSamples += 1;
+  } else if (status.includes('catch-up-speed')) {
+    aggregate.catchupSamples += 1;
+  } else {
+    aggregate.okSamples += 1;
+  }
+}
+
+function formatTrackDiagSummary(aggregate) {
+  const totalDurationSec = Math.max(0, Math.round(((aggregate.endedAt ?? Date.now()) - aggregate.startedAt) / 1000));
+  const avgQueue = aggregate.samples > 0 ? (aggregate.queueDepthSumMs / aggregate.samples) : Number.NaN;
+  const avgPace = aggregate.paceCount > 0 ? (aggregate.paceSum / aggregate.paceCount) : Number.NaN;
+
+  const queueMin = Number.isFinite(aggregate.queueDepthMinMs) ? aggregate.queueDepthMinMs : Number.NaN;
+  const paceMin = Number.isFinite(aggregate.paceMin) ? aggregate.paceMin : Number.NaN;
+
+  return [
+    { name: 'Track', value: aggregate.trackTitle, inline: true },
+    { name: 'Source', value: aggregate.trackSource, inline: true },
+    { name: 'Duration', value: `${totalDurationSec}s`, inline: true },
+    { name: 'Samples', value: String(aggregate.samples), inline: true },
+    { name: 'Queue Min/Avg/Max', value: `${toFixedSafe(queueMin, 0)} / ${toFixedSafe(avgQueue, 0)} / ${toFixedSafe(aggregate.queueDepthMaxMs, 0)} ms`, inline: true },
+    { name: 'Pace Min/Avg/Max', value: `${toFixedSafe(paceMin, 3)} / ${toFixedSafe(avgPace, 3)} / ${toFixedSafe(aggregate.paceMax, 3)}`, inline: true },
+    { name: 'Low-buffer samples', value: String(aggregate.lowBufferSamples), inline: true },
+    { name: 'Catch-up samples', value: String(aggregate.catchupSamples), inline: true },
+    { name: 'OK samples', value: String(aggregate.okSamples), inline: true },
+    { name: 'Backpressure max/total', value: `${aggregate.backpressureMax} / ${aggregate.backpressureTotal}`, inline: true },
+    { name: 'Conceal max/total', value: `${aggregate.concealedFramesMax} / ${aggregate.concealedFramesTotal}`, inline: true },
+  ];
+}
+
 function splitTextIntoPages(text, maxChars = 900) {
   const value = String(text ?? '').trim();
   if (!value) return [];
@@ -83,6 +235,158 @@ function buildLyricsPagePayload(ctx, title, source, pageText, pageIndex, totalPa
 }
 
 export function registerQueueEffectsAndMiscCommands(registry) {
+  registry.register(createCommand({
+    name: 'diag',
+    aliases: ['audiodiag'],
+    description: 'Owner-only playback diagnostics snapshot and per-track report.',
+    usage: 'diag [now|last|track|cancel]',
+    async execute(ctx) {
+      ensureDiagOwner(ctx);
+      ensureGuild(ctx);
+
+      const mode = String(ctx.args[0] ?? 'now').trim().toLowerCase();
+      const key = String(ctx.guildId);
+      const activeMonitor = diagTrackMonitorsByGuild.get(key);
+
+      if (mode === 'cancel') {
+        if (!activeMonitor) {
+          await ctx.reply.warning('No active per-track diagnostics run.');
+          return;
+        }
+        try {
+          activeMonitor.cleanup?.();
+        } catch {
+          // ignore monitor cleanup errors
+        }
+        diagTrackMonitorsByGuild.delete(key);
+        await ctx.reply.info('Per-track diagnostics cancelled.');
+        return;
+      }
+
+      if (mode === 'track') {
+        if (activeMonitor) {
+          await ctx.reply.warning('A per-track diagnostics run is already active.');
+          return;
+        }
+
+        const session = getSessionOrThrow(ctx);
+        ensureSessionTrack(ctx, session);
+        const targetTrack = session.player.currentTrack;
+        const aggregate = createTrackDiagAggregate(targetTrack);
+        let intervalHandle = null;
+
+        const sampleNow = async () => {
+          const playerDiagnostics = typeof session.player?.getDiagnostics === 'function'
+            ? session.player.getDiagnostics()
+            : (typeof session.player?.getState === 'function' ? session.player.getState() : null);
+          const voiceDiagnostics = typeof session.connection?.getDiagnostics === 'function'
+            ? await session.connection.getDiagnostics()
+            : null;
+          const snapshot = buildDiagSnapshot(session, playerDiagnostics, voiceDiagnostics);
+          addTrackDiagSample(aggregate, snapshot);
+        };
+
+        let finalized = false;
+        const finalize = async (reason) => {
+          if (finalized) return;
+          finalized = true;
+
+          if (intervalHandle) clearInterval(intervalHandle);
+          session.player.off?.('trackEnd', onTrackEnd);
+          session.player.off?.('trackStart', onTrackStart);
+          diagTrackMonitorsByGuild.delete(key);
+
+          aggregate.endedAt = Date.now();
+          const fields = [
+            ...formatTrackDiagSummary(aggregate),
+            { name: 'End reason', value: reason, inline: true },
+          ];
+          await ctx.reply.info('Audio diagnostics (track summary)', fields);
+        };
+
+        const onTrackEnd = async ({ track }) => {
+          if (!track || String(track.id ?? '') !== String(aggregate.trackId ?? '')) return;
+          await finalize('track_ended');
+        };
+        const onTrackStart = async (track) => {
+          if (!track) return;
+          if (String(track.id ?? '') === String(aggregate.trackId ?? '')) return;
+          await finalize('track_changed');
+        };
+
+        session.player.on('trackEnd', onTrackEnd);
+        session.player.on('trackStart', onTrackStart);
+
+        intervalHandle = setInterval(() => {
+          sampleNow().catch(() => null);
+        }, 1_000);
+        intervalHandle.unref?.();
+
+        const cleanup = () => {
+          clearInterval(intervalHandle);
+          session.player.off?.('trackEnd', onTrackEnd);
+          session.player.off?.('trackStart', onTrackStart);
+        };
+        diagTrackMonitorsByGuild.set(key, { cleanup });
+
+        await sampleNow().catch(() => null);
+        await ctx.reply.info(
+          `Per-track diagnostics started for **${aggregate.trackTitle}**. I will send the summary when this track ends.`
+        );
+        return;
+      }
+
+      if (mode === 'last') {
+        const previous = diagSnapshotsByGuild.get(key);
+        if (!previous) {
+          await ctx.reply.warning('No previous diagnostics snapshot found. Run `diag now` first.');
+          return;
+        }
+
+        await ctx.reply.info('Audio diagnostics (last)', [
+          { name: 'Captured', value: new Date(previous.capturedAt).toISOString(), inline: true },
+          { name: 'Track', value: previous.track?.title ?? 'none', inline: true },
+          { name: 'Source', value: previous.track?.source ?? 'n/a', inline: true },
+          { name: 'Pace ratio', value: toFixedSafe(previous.computed?.paceRatio, 3), inline: true },
+          { name: 'Queue depth', value: `${toFixedSafe(previous.computed?.queueDepthMs, 0)} ms`, inline: true },
+          { name: 'Backpressure', value: String(previous.computed?.backpressureWaits ?? 0), inline: true },
+          { name: 'Concealed frames', value: String(previous.computed?.concealedFrames ?? 0), inline: true },
+          { name: 'RTT/Jitter', value: `${toFixedSafe(previous.computed?.rttMs, 0)} / ${toFixedSafe(previous.computed?.jitterMs, 0)} ms`, inline: true },
+          { name: 'Output bitrate', value: `${toFixedSafe(previous.computed?.outboundBitrateKbps, 0)} kbps`, inline: true },
+          { name: 'Status', value: describeDiagStatus(previous), inline: true },
+        ]);
+        return;
+      }
+
+      if (mode !== 'now') {
+        throw new ValidationError(`Usage: ${ctx.prefix}diag [now|last|track|cancel]`);
+      }
+
+      const session = getSessionOrThrow(ctx);
+      const playerDiagnostics = typeof session.player?.getDiagnostics === 'function'
+        ? session.player.getDiagnostics()
+        : (typeof session.player?.getState === 'function' ? session.player.getState() : null);
+      const voiceDiagnostics = typeof session.connection?.getDiagnostics === 'function'
+        ? await session.connection.getDiagnostics()
+        : null;
+      const snapshot = buildDiagSnapshot(session, playerDiagnostics, voiceDiagnostics);
+      diagSnapshotsByGuild.set(key, snapshot);
+
+      await ctx.reply.info('Audio diagnostics (now)', [
+        { name: 'Captured', value: new Date(snapshot.capturedAt).toISOString(), inline: true },
+        { name: 'Track', value: snapshot.track?.title ?? 'none', inline: true },
+        { name: 'Source', value: snapshot.track?.source ?? 'n/a', inline: true },
+        { name: 'Pace ratio', value: toFixedSafe(snapshot.computed?.paceRatio, 3), inline: true },
+        { name: 'Queue depth', value: `${toFixedSafe(snapshot.computed?.queueDepthMs, 0)} ms`, inline: true },
+        { name: 'Backpressure', value: String(snapshot.computed?.backpressureWaits ?? 0), inline: true },
+        { name: 'Concealed frames', value: String(snapshot.computed?.concealedFrames ?? 0), inline: true },
+        { name: 'RTT/Jitter', value: `${toFixedSafe(snapshot.computed?.rttMs, 0)} / ${toFixedSafe(snapshot.computed?.jitterMs, 0)} ms`, inline: true },
+        { name: 'Output bitrate', value: `${toFixedSafe(snapshot.computed?.outboundBitrateKbps, 0)} kbps`, inline: true },
+        { name: 'Status', value: describeDiagStatus(snapshot), inline: true },
+      ]);
+    },
+  }));
+
   registry.register(createCommand({
     name: 'remove',
     aliases: ['rm'],
