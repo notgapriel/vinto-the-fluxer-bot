@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.2] - 2026-03-06
+
+- Deezer playback parity and reliability:
+  - aligned ARL media URL flow closer to lavasrc (`song.getData` token path and first-media-first-source selection)
+  - added Deezer session token caching with TTL refresh behavior for fewer gateway roundtrips
+  - switched ARL media format requests to configurable `BF_CBC_STRIPE` format lists (`DEEZER_TRACK_FORMATS`, default `MP3_128,MP3_64`)
+  - improved cookie handling compatibility for fetch runtimes that only expose a single `set-cookie` header accessor
+- Queue-end and idle-disconnect fixes:
+  - fixed queue-empty handling so stale stream-tail state no longer blocks idle timeout scheduling
+  - added explicit voice stream stop on queue end/reset paths to avoid lingering stream state
+  - ensured queue-end idle timeout can disconnect after configured inactivity even when listeners remain in voice
+- YouTube resolver hardening:
+  - improved playlist URL normalization for `music.youtube.com`, HTML-escaped query strings, and radio (`RD...`) playlist links
+  - added fallback inference from radio playlist IDs to watch URLs when playlist resolvers fail
+  - added Windows launcher fallback for yt-dlp via `py -m yt_dlp` when `yt-dlp` binary is not on PATH
+- Tests:
+  - added coverage for Deezer parity behavior, queue-empty voice-stop/idle-timeout behavior, and YouTube playlist fallback resolution paths
+
 ## [0.4.1] - 2026-03-05
 
 - Lyrics matching reliability:
