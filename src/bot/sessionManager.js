@@ -147,6 +147,7 @@ export class SessionManager extends EventEmitter {
       lastActivityAt: now(),
       textChannelId: null,
       idleTimer: null,
+      idleTimeoutIgnoreListeners: false,
       diagnostics: {
         timer: null,
         inFlight: false,
@@ -161,6 +162,7 @@ export class SessionManager extends EventEmitter {
 
     player.on('trackStart', (track) => {
       if (this.sessions.get(guildId) !== session) return;
+      session.idleTimeoutIgnoreListeners = false;
       this._clearIdleTimer(session);
       this._resetVoteState(session, track?.id ?? null);
       this._startPlaybackDiagnostics(session);
@@ -185,12 +187,12 @@ export class SessionManager extends EventEmitter {
 
     player.on('queueEmpty', () => {
       if (this.sessions.get(guildId) !== session) return;
-      if (this._isSessionPlaybackActive(session)) {
+      const trackActive = Boolean(session?.player?.playing || session?.player?.currentTrack);
+      if (trackActive) {
         this.logger?.debug?.('Ignoring queueEmpty event while playback is still active', {
           guildId,
           playing: Boolean(session?.player?.playing),
           hasCurrentTrack: Boolean(session?.player?.currentTrack),
-          isStreaming: Boolean(session?.connection?.isStreaming),
         });
         return;
       }
@@ -329,10 +331,13 @@ export class SessionManager extends EventEmitter {
     this.emit('queueEmpty', { session });
 
     if (session.settings.stayInVoiceEnabled) {
+      session.idleTimeoutIgnoreListeners = false;
       this._clearIdleTimer(session);
       return;
     }
 
+    // Queue end should disconnect after idle timeout even if users remain in VC.
+    session.idleTimeoutIgnoreListeners = true;
     this._scheduleIdleTimeout(session);
   }
 
@@ -369,7 +374,9 @@ export class SessionManager extends EventEmitter {
       }
 
       const active = this._isSessionPlaybackActive(session);
-      const hasHumanListeners = this._hasHumanListeners(session);
+      const hasHumanListeners = session.idleTimeoutIgnoreListeners
+        ? false
+        : this._hasHumanListeners(session);
       if (active || hasHumanListeners || session.settings.stayInVoiceEnabled) {
         this._scheduleIdleTimeout(session);
         return;

@@ -547,13 +547,11 @@ export class CommandRouter {
       const activeSession = this.sessions.get(session?.guildId);
       if (activeSession && activeSession !== session) return;
       const player = session?.player ?? null;
-      const connection = session?.connection ?? null;
-      if (player?.playing || player?.currentTrack || connection?.isStreaming) {
+      if (player?.playing || player?.currentTrack) {
         this.logger?.debug?.('Skipping queueEmpty announcement while playback is still active', {
           guildId: session?.guildId ?? null,
           playing: Boolean(player?.playing),
           hasCurrentTrack: Boolean(player?.currentTrack),
-          isStreaming: Boolean(connection?.isStreaming),
         });
         return;
       }

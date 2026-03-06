@@ -141,6 +141,10 @@ export class VoiceConnection {
     });
   }
 
+  stopAudio() {
+    this._stopAudioPump();
+  }
+
   _waitForVoiceServer() {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {

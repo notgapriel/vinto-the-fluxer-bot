@@ -13,7 +13,12 @@ function createManager(overrides = {}) {
   };
 
   return new SessionManager({
-    gateway: {},
+    gateway: {
+      joinVoice() {},
+      leaveVoice() {},
+      on() {},
+      off() {},
+    },
     config: { ...defaultConfig, ...(overrides.config ?? {}) },
     guildConfigs: null,
     logger: null,
@@ -194,4 +199,93 @@ test('idle timeout ignores stale timer from replaced session instance', async ()
   manager._clearIdleTimer(stale);
 
   assert.equal(destroyCalls, 0);
+});
+
+test('queueEmpty is handled when only stream tail is active', async () => {
+  const manager = createManager({
+    config: {
+      sessionIdleMs: 10_000,
+    },
+  });
+
+  const session = await manager.ensure('guild-1');
+  manager._clearIdleTimer(session);
+
+  const queueEmptyEvents = [];
+  manager.on('queueEmpty', ({ session: emitted }) => {
+    if (emitted === session) {
+      queueEmptyEvents.push(true);
+    }
+  });
+
+  session.connection.currentAudioStream = {};
+  session.player.playing = false;
+  session.player.queue.current = null;
+  session.player.emit('queueEmpty');
+
+  await sleep(5);
+  assert.equal(queueEmptyEvents.length, 1);
+  assert.ok(session.idleTimer);
+
+  manager._clearIdleTimer(session);
+  session.connection.currentAudioStream = null;
+});
+
+test('queueEmpty is ignored while current track is still active', async () => {
+  const manager = createManager({
+    config: {
+      sessionIdleMs: 10_000,
+    },
+  });
+
+  const session = await manager.ensure('guild-1');
+  manager._clearIdleTimer(session);
+
+  let queueEmptyEvents = 0;
+  manager.on('queueEmpty', ({ session: emitted }) => {
+    if (emitted === session) {
+      queueEmptyEvents += 1;
+    }
+  });
+
+  session.player.playing = true;
+  session.player.queue.current = { id: 'track-1', title: 'active' };
+  session.player.emit('queueEmpty');
+
+  await sleep(5);
+  assert.equal(queueEmptyEvents, 0);
+  assert.equal(session.idleTimer, null);
+});
+
+test('queueEmpty idle timeout disconnects even when listeners remain in VC', async () => {
+  const manager = createManager({
+    config: {
+      sessionIdleMs: 20,
+    },
+    voiceStateStore: {
+      countUsersInChannel() {
+        return 1;
+      },
+    },
+    botUserId: 'bot-1',
+  });
+
+  const session = await manager.ensure('guild-1');
+  session.connection.channelId = 'voice-1';
+  manager._clearIdleTimer(session);
+
+  const calls = [];
+  manager.destroy = async (guildId, reason) => {
+    calls.push([guildId, reason]);
+    return true;
+  };
+
+  session.player.playing = false;
+  session.player.queue.current = null;
+  session.player.emit('queueEmpty');
+
+  await sleep(70);
+  manager._clearIdleTimer(session);
+
+  assert.deepEqual(calls, [['guild-1', 'idle_timeout']]);
 });
