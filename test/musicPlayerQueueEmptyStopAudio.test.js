@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 
 import { MusicPlayer } from '../src/player/MusicPlayer.js';
 
@@ -52,4 +54,44 @@ test('_handleTrackClose with empty queue stops voice stream and emits queueEmpty
 
   assert.equal(queueEmptyCount, 1);
   assert.equal(voice.stopCalls, 1);
+});
+
+test('play() reports a startup pipeline close as trackError instead of queueEmpty', async () => {
+  const voice = createVoice();
+  const player = new MusicPlayer(voice, { logger: null });
+  const ffmpeg = new EventEmitter();
+  ffmpeg.stdout = new PassThrough();
+  ffmpeg.kill = () => {};
+
+  player._startPlayDlPipeline = async () => {
+    player.ffmpeg = ffmpeg;
+  };
+
+  let queueEmptyEvent = null;
+  let trackError = null;
+  player.on('queueEmpty', (event) => {
+    queueEmptyEvent = event;
+  });
+  player.on('trackError', ({ error }) => {
+    trackError = error;
+  });
+
+  player.enqueueResolvedTracks([
+    player._buildTrack({
+      title: 'Broken startup track',
+      url: 'https://example.com/audio',
+      duration: '03:00',
+      source: 'url',
+      requestedBy: 'user-1',
+    }),
+  ]);
+
+  const playPromise = player.play();
+  setImmediate(() => {
+    ffmpeg.emit('close', 1, null);
+  });
+  await playPromise;
+
+  assert.equal(queueEmptyEvent?.reason, 'startup_error');
+  assert.match(String(trackError?.message ?? ''), /before audio output/i);
 });

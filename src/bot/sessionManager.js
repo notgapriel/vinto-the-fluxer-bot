@@ -185,7 +185,7 @@ export class SessionManager extends EventEmitter {
       this.emit('trackError', { session, track, error });
     });
 
-    player.on('queueEmpty', () => {
+    player.on('queueEmpty', (event = {}) => {
       if (this.sessions.get(guildId) !== session) return;
       const trackActive = Boolean(session?.player?.playing || session?.player?.currentTrack);
       if (trackActive) {
@@ -199,7 +199,7 @@ export class SessionManager extends EventEmitter {
 
       this._stopPlaybackDiagnostics(session);
       this.touch(guildId);
-      this._handleQueueEmpty(session).catch((err) => {
+      this._handleQueueEmpty(session, event).catch((err) => {
         this.logger?.warn?.('Queue empty handler failed', {
           guildId,
           error: err instanceof Error ? err.message : String(err),
@@ -327,8 +327,8 @@ export class SessionManager extends EventEmitter {
     }
   }
 
-  async _handleQueueEmpty(session) {
-    this.emit('queueEmpty', { session });
+  async _handleQueueEmpty(session, event = {}) {
+    this.emit('queueEmpty', { session, ...event });
 
     if (session.settings.stayInVoiceEnabled) {
       session.idleTimeoutIgnoreListeners = false;

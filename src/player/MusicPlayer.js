@@ -555,19 +555,23 @@ export class MusicPlayer extends EventEmitter {
         await this._startPlayDlPipeline(track.url, 0);
       }
 
+      let playbackStarted = false;
+      this.ffmpeg.once('close', async (code, signal) => {
+        if (!playbackStarted) return;
+        await this._handleTrackClose(track, code, signal, playbackToken);
+      });
+
       this.liveAudioProcessor = this._createLiveAudioProcessor();
       this._bindPipelineErrorHandler(this.liveAudioProcessor, 'liveAudioProcessor');
       this.ffmpeg.stdout.pipe(this.liveAudioProcessor);
       await this.voice.sendAudio(this.liveAudioProcessor);
+      await this._awaitInitialPlaybackChunk(this.liveAudioProcessor, this.ffmpeg, 8_000);
+      playbackStarted = true;
       this._startPlaybackClock(track.seekStartSec ?? 0);
       this.lastKnownTrack = track;
       this.lastKnownTrackAtMs = Date.now();
       this.emit('trackStart', track);
       this.logger?.info?.('Playback started', { title: track.title, url: track.url, seek: track.seekStartSec ?? 0 });
-
-      this.ffmpeg.once('close', async (code, signal) => {
-        await this._handleTrackClose(track, code, signal, playbackToken);
-      });
     } catch (err) {
       const normalized = this._normalizePlaybackError(err);
       this.emit('trackError', { track, error: normalized });
@@ -585,7 +589,7 @@ export class MusicPlayer extends EventEmitter {
       }
 
       this._stopVoiceStream();
-      this.emit('queueEmpty');
+      this.emit('queueEmpty', { reason: 'startup_error' });
     }
   }
 
@@ -1689,6 +1693,61 @@ export class MusicPlayer extends EventEmitter {
       proc.stdout?.on?.('data', onData);
       proc.on?.('close', onClose);
       proc.on?.('error', onError);
+    });
+  }
+
+  _awaitInitialPlaybackChunk(stream, proc, timeoutMs = 8_000) {
+    if (!stream?.once || !stream?.off) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        cleanup();
+        reject(new Error('Playback pipeline did not produce audio output in time.'));
+      }, timeoutMs);
+
+      const onData = () => {
+        if (settled) return;
+        cleanup();
+        resolve();
+      };
+
+      const onStreamError = (err) => {
+        if (settled) return;
+        cleanup();
+        reject(err instanceof Error ? err : new Error(String(err)));
+      };
+
+      const onProcError = (err) => {
+        if (settled) return;
+        cleanup();
+        reject(err instanceof Error ? err : new Error(String(err)));
+      };
+
+      const onProcClose = (code, signal) => {
+        if (settled) return;
+        cleanup();
+        const codeLabel = code == null ? 'unknown' : String(code);
+        const signalLabel = signal ? `, signal=${signal}` : '';
+        reject(new Error(`Playback pipeline exited before audio output (code=${codeLabel}${signalLabel}).`));
+      };
+
+      const cleanup = () => {
+        settled = true;
+        clearTimeout(timeout);
+        stream.off?.('data', onData);
+        stream.off?.('error', onStreamError);
+        proc?.off?.('error', onProcError);
+        proc?.off?.('close', onProcClose);
+      };
+
+      stream.once('data', onData);
+      stream.once('error', onStreamError);
+      proc?.once?.('error', onProcError);
+      proc?.once?.('close', onProcClose);
     });
   }
 

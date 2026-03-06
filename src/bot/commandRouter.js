@@ -421,7 +421,7 @@ export class CommandRouter {
       await this._sendSessionPanelUpdate(session, 'track_error');
     });
 
-    this.sessions.on('queueEmpty', async ({ session }) => {
+    this.sessions.on('queueEmpty', async ({ session, reason = null }) => {
       const activeSession = this.sessions.get(session?.guildId);
       if (activeSession && activeSession !== session) return;
       const player = session?.player ?? null;
@@ -430,6 +430,12 @@ export class CommandRouter {
           guildId: session?.guildId ?? null,
           playing: Boolean(player?.playing),
           hasCurrentTrack: Boolean(player?.currentTrack),
+        });
+        return;
+      }
+      if (reason === 'startup_error') {
+        this.logger?.debug?.('Skipping queueEmpty announcement for startup playback failure', {
+          guildId: session?.guildId ?? null,
         });
         return;
       }
