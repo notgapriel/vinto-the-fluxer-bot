@@ -100,6 +100,9 @@ export const urlResolverMethods = {
   },
 
   async _resolveSpotifyByGuess(url, requestedBy) {
+    if (url.includes('/artist/')) {
+      return this._resolveSpotifyArtist(url, requestedBy);
+    }
     if (url.includes('/playlist/') || url.includes('/album/')) {
       return this._resolveSpotifyCollection(url, requestedBy);
     }
@@ -149,7 +152,12 @@ export const urlResolverMethods = {
         parsed.hostname = 'www.youtube.com';
         return parsed.toString();
       }
-      const shouldExpand = parsed.hostname.includes('link.deezer.com') || parsed.hostname.includes('on.soundcloud.com');
+      const shouldExpand = (
+        parsed.hostname.includes('link.deezer.com')
+        || parsed.hostname.includes('on.soundcloud.com')
+        || parsed.hostname === 'spoti.fi'
+        || parsed.hostname.includes('spotify.link')
+      );
       if (shouldExpand) {
         const response = await fetch(trimmed, {
           method: 'GET',

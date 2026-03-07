@@ -28,21 +28,27 @@ The bot is split into clear layers:
 
 The player resolves input in this order:
 
-1. Plain text query -> YouTube search
+1. Plain text query:
+   - Deezer search first when `DEEZER_ARL` is configured and Deezer import is enabled
+   - otherwise YouTube search
 2. Known provider URL types via `play-dl` validation:
    - YouTube video/playlist
    - SoundCloud track/playlist
    - Spotify track/album/playlist
    - Deezer track/album/playlist
-3. Provider-specific fallback by URL pattern
-4. Generic URL fallback path
+3. Provider-specific direct URL resolution by URL pattern:
+   - Audius
+   - Spotify artist URLs
+   - SoundCloud fallback URL patterns
+   - Deezer fallback URL patterns
+4. Generic URL fallback by direct metadata lookup or YouTube search
 
 Playback path notes:
 
 - Deezer: direct media URL resolution with encrypted-stream handling and resume/retry fallback.
 - SoundCloud: direct API/transcoding playback path.
 - Audius: direct API playback path.
-- Spotify: currently disabled and returns `Spotify support is coming soon.`.
+- Spotify: metadata resolver only. Track, album, playlist, and artist URLs are resolved through the Spotify Web API, then mirrored to a playable provider. Current mirror preference is Deezer first, then YouTube fallback.
 - Generic fallback resolution can still map to YouTube search when a provider URL cannot be resolved directly.
 
 ## Data Model Notes

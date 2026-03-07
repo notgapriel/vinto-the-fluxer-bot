@@ -95,3 +95,36 @@ test('play() reports a startup pipeline close as trackError instead of queueEmpt
   assert.equal(queueEmptyEvent?.reason, 'startup_error');
   assert.match(String(trackError?.message ?? ''), /before audio output/i);
 });
+
+test('play() increases initial playback timeout for large seek offsets', async () => {
+  const voice = createVoice();
+  const player = new MusicPlayer(voice, { logger: null });
+  let startupTimeoutMs = null;
+
+  player._startYouTubePipeline = async () => {
+    player.ffmpeg = {
+      stdout: {
+        pipe() {},
+      },
+      once() {},
+    };
+  };
+  player._awaitInitialPlaybackChunk = async (_stream, _proc, timeoutMs) => {
+    startupTimeoutMs = timeoutMs;
+  };
+
+  player.enqueueResolvedTracks([
+    player._buildTrack({
+      title: 'Long seek track',
+      url: 'https://www.youtube.com/watch?v=OBoMLZTtqb8',
+      duration: '2:00:00',
+      source: 'youtube',
+      requestedBy: 'user-1',
+      seekStartSec: 5340,
+    }),
+  ]);
+
+  await player.play();
+
+  assert.equal(startupTimeoutMs, 60_000);
+});

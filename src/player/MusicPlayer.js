@@ -9,6 +9,7 @@ import { AudiusClient } from './musicPlayer/AudiusClient.js';
 import { DeezerClient } from './musicPlayer/DeezerClient.js';
 import { ResolverClient } from './musicPlayer/ResolverClient.js';
 import { SoundCloudClient } from './musicPlayer/SoundCloudClient.js';
+import { SpotifyClient } from './musicPlayer/SpotifyClient.js';
 import ffmpegPath from 'ffmpeg-static';
 import playdl from 'play-dl';
 import { Queue } from './Queue.js';
@@ -110,12 +111,18 @@ export class MusicPlayer extends EventEmitter {
     this.enableYtPlayback = options.enableYtPlayback !== false;
     this.enableSpotifyImport = options.enableSpotifyImport !== false;
     this.enableDeezerImport = options.enableDeezerImport !== false;
+    this.spotifyClientId = String(options.spotifyClientId ?? process.env.SPOTIFY_CLIENT_ID ?? '').trim() || null;
+    this.spotifyClientSecret = String(options.spotifyClientSecret ?? process.env.SPOTIFY_CLIENT_SECRET ?? '').trim() || null;
+    this.spotifyRefreshToken = String(options.spotifyRefreshToken ?? process.env.SPOTIFY_REFRESH_TOKEN ?? '').trim() || null;
+    this.spotifyMarket = String(options.spotifyMarket ?? process.env.SPOTIFY_MARKET ?? 'US').trim().toUpperCase() || 'US';
     this.deezerArl = String(options.deezerArl ?? process.env.DEEZER_ARL ?? '').trim() || null;
     this.deezerTrackFormats = normalizeDeezerTrackFormats(
       options.deezerTrackFormats ?? process.env.DEEZER_TRACK_FORMATS ?? null
     );
     this._deezerCookieHeader = this.deezerArl ? `arl=${this.deezerArl}` : null;
     this._deezerSessionTokens = null;
+    this._spotifyAccessToken = null;
+    this._spotifyAccessTokenExpiresAtMs = 0;
     this.soundcloudClientId = String(options.soundcloudClientId ?? process.env.SOUNDCLOUD_CLIENT_ID ?? '').trim() || null;
     this.soundcloudAutoClientId = options.soundcloudAutoClientId !== false;
     this.youtubePlaylistResolver = normalizeYouTubePlaylistResolver(
@@ -140,6 +147,7 @@ export class MusicPlayer extends EventEmitter {
     this.sources = Object.freeze({
       audius: new AudiusClient(this),
       deezer: new DeezerClient(this),
+      spotify: new SpotifyClient(this),
       resolver: new ResolverClient(this),
       soundcloud: new SoundCloudClient(this),
     });
@@ -565,7 +573,11 @@ export class MusicPlayer extends EventEmitter {
       this._bindPipelineErrorHandler(this.liveAudioProcessor, 'liveAudioProcessor');
       this.ffmpeg.stdout.pipe(this.liveAudioProcessor);
       await this.voice.sendAudio(this.liveAudioProcessor);
-      await this._awaitInitialPlaybackChunk(this.liveAudioProcessor, this.ffmpeg, 8_000);
+      await this._awaitInitialPlaybackChunk(
+        this.liveAudioProcessor,
+        this.ffmpeg,
+        this._getInitialPlaybackChunkTimeoutMs(track)
+      );
       playbackStarted = true;
       this._startPlaybackClock(track.seekStartSec ?? 0);
       this.lastKnownTrack = track;
@@ -928,6 +940,9 @@ export class MusicPlayer extends EventEmitter {
       deezerTrackId: data?.deezerTrackId ?? data?.deezer_track_id ?? null,
       deezerPreviewUrl: data?.deezerPreviewUrl ?? data?.deezer_preview_url ?? null,
       deezerFullStreamUrl: data?.deezerFullStreamUrl ?? data?.deezer_full_stream_url ?? null,
+      spotifyTrackId: data?.spotifyTrackId ?? data?.spotify_track_id ?? null,
+      spotifyPreviewUrl: data?.spotifyPreviewUrl ?? data?.spotify_preview_url ?? null,
+      isPreview: data?.isPreview ?? data?.is_preview ?? false,
     });
   }
 
@@ -1749,6 +1764,14 @@ export class MusicPlayer extends EventEmitter {
       proc?.once?.('error', onProcError);
       proc?.once?.('close', onProcClose);
     });
+  }
+
+  _getInitialPlaybackChunkTimeoutMs(track) {
+    const seekSec = Math.max(0, Number.parseInt(String(track?.seekStartSec ?? 0), 10) || 0);
+    if (seekSec <= 0) return 8_000;
+
+    // Pipe-based seek startup can take longer on large offsets before the first PCM chunk appears.
+    return Math.min(60_000, 8_000 + (seekSec * 10));
   }
 
   _spawnProcess(cmd, args, options) {

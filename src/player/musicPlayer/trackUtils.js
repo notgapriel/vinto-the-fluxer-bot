@@ -150,6 +150,34 @@ export function isSpotifyUrl(value) {
   }
 }
 
+export function extractSpotifyEntity(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+
+    if (host === 'spoti.fi' || host.includes('spotify.link')) {
+      return null;
+    }
+
+    const segments = String(parsed.pathname ?? '')
+      .split('/')
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
+    const types = new Set(['track', 'album', 'playlist', 'artist']);
+    const typeIndex = segments.findIndex((segment) => types.has(segment.toLowerCase()));
+    if (typeIndex < 0) return null;
+
+    const type = segments[typeIndex].toLowerCase();
+    const id = String(segments[typeIndex + 1] ?? '').trim();
+    if (!/^[A-Za-z0-9]+$/.test(id)) return null;
+
+    return { type, id };
+  } catch {
+    return null;
+  }
+}
+
 export function extractDeezerTrackId(value) {
   try {
     const parsed = new URL(value);

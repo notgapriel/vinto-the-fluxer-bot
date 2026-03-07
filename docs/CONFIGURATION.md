@@ -64,6 +64,9 @@ Defaults come from parsing logic in `src/config.js`.
 | `SESSION_IDLE_MS` | `300000` | Auto-disconnect idle timeout. |
 | `MAX_QUEUE_SIZE` | `100` | Max queued tracks per guild. |
 | `MAX_PLAYLIST_TRACKS` | `25` | Max tracks pulled from external playlist import. |
+| `MAX_SAVED_PLAYLISTS_PER_GUILD` | `100` | Max persisted guild playlists. |
+| `MAX_SAVED_TRACKS_PER_PLAYLIST` | `500` | Max persisted tracks in one saved playlist. |
+| `MAX_FAVORITES_PER_USER` | `500` | Max saved favorites per user. |
 | `PERSISTENT_HISTORY_SIZE` | `200` | Saved history depth. |
 | `DEFAULT_VOLUME_PERCENT` | `100` | Initial playback volume. |
 | `MIN_VOLUME_PERCENT` | `0` | Lower volume bound. |
@@ -90,16 +93,16 @@ Defaults come from parsing logic in `src/config.js`.
 | --- | --- | --- |
 | `ENABLE_YT_SEARCH` | `1` | Toggle YouTube search resolution. |
 | `ENABLE_YT_PLAYBACK` | `1` | Toggle YouTube playback pipeline. |
-| `ENABLE_SPOTIFY_IMPORT` | `1` | Toggle Spotify URL ingestion. |
+| `ENABLE_SPOTIFY_IMPORT` | `1` | Toggle Spotify URL ingestion and metadata resolution. |
 | `ENABLE_DEEZER_IMPORT` | `1` | Toggle Deezer URL ingestion. |
 
 ## Provider Credentials
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `SPOTIFY_CLIENT_ID` | empty | Required together with secret and refresh token. |
-| `SPOTIFY_CLIENT_SECRET` | empty | Required together with client id and refresh token. |
-| `SPOTIFY_REFRESH_TOKEN` | empty | Required together with client id and secret. |
+| `SPOTIFY_CLIENT_ID` | empty | Required together with secret and refresh token by current startup validation. |
+| `SPOTIFY_CLIENT_SECRET` | empty | Required together with client id and refresh token by current startup validation. |
+| `SPOTIFY_REFRESH_TOKEN` | empty | Required together with client id and secret by current startup validation. |
 | `SPOTIFY_MARKET` | `US` | Two-letter country code. |
 | `SOUNDCLOUD_CLIENT_ID` | empty | Optional explicit SoundCloud client id. |
 | `SOUNDCLOUD_AUTO_CLIENT_ID` | `1` | Auto-fetch SoundCloud client id on startup. |

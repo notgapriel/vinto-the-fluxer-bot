@@ -14,11 +14,15 @@ export const trackFactoryMethods = {
     deezerTrackId = null,
     deezerPreviewUrl = null,
     deezerFullStreamUrl = null,
+    spotifyTrackId = null,
+    spotifyPreviewUrl = null,
+    isPreview = false,
     seekStartSec = 0,
   }) {
     const normalizedThumbnail = normalizeThumbnailUrl(thumbnailUrl) ?? buildYouTubeThumbnailFromUrl(url);
     const normalizedDeezerPreview = normalizeThumbnailUrl(deezerPreviewUrl);
     const normalizedDeezerFull = normalizeThumbnailUrl(deezerFullStreamUrl);
+    const normalizedSpotifyPreview = normalizeThumbnailUrl(spotifyPreviewUrl);
     return {
       id: buildTrackId(),
       title: title || 'Unknown title',
@@ -33,6 +37,9 @@ export const trackFactoryMethods = {
       deezerTrackId: deezerTrackId ? String(deezerTrackId) : null,
       deezerPreviewUrl: normalizedDeezerPreview,
       deezerFullStreamUrl: normalizedDeezerFull,
+      spotifyTrackId: spotifyTrackId ? String(spotifyTrackId) : null,
+      spotifyPreviewUrl: normalizedSpotifyPreview,
+      isPreview: Boolean(isPreview),
       queuedAt: Date.now(),
       seekStartSec: Math.max(0, Number.parseInt(String(seekStartSec), 10) || 0),
     };

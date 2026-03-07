@@ -9,7 +9,7 @@ Robust, self-hostable music bot with resilient gateway handling, queue/session s
 ## Why This Project
 
 - Production-minded architecture (reconnect/resume, retries, graceful shutdown).
-- Source ingestion from YouTube/SoundCloud/Deezer URLs.
+- Source ingestion from YouTube, SoundCloud, Deezer, Audius, and Spotify URLs.
 - Persistent playlists, favorites, and history backed by MongoDB.
 - Built-in monitoring endpoints and optional Sentry integration.
 - Command system designed for long-term maintainability.
@@ -19,8 +19,9 @@ Robust, self-hostable music bot with resilient gateway handling, queue/session s
 - Reliable connectivity: gateway heartbeat watchdog, reconnect backoff, session resume, hardened REST retries and `429` handling.
 - Music playback: queue management, play-next, seek, history, loop, shuffle, filters, EQ, DJ role controls, and vote-skip for shared voice channels.
 - URL import:
-  - Deezer and SoundCloud can use direct playback paths.
-  - Spotify commands are currently disabled with `Spotify support is coming soon.`.
+  - Deezer, SoundCloud, and Audius can use direct playback paths.
+  - Spotify resolves tracks/albums/playlists/artists through the Spotify Web API and mirrors them to playable providers.
+  - Spotify currently prefers Deezer as mirror target when `DEEZER_ARL` is configured, then falls back to YouTube playback.
 - Persistence: guild config store with cache + MongoDB, plus guild playlists, user favorites, and playback history.
 - Operations: `/healthz`, `/readyz`, `/metrics`, structured logging, and optional Sentry exception reporting.
 
@@ -128,8 +129,9 @@ Key modules:
 
 ## Operations Notes
 
+- Plain text `play`/`search` resolution is currently `Deezer -> YouTube` when `DEEZER_ARL` is configured, otherwise YouTube-only.
 - If YouTube returns a bot-check challenge, use `YTDLP_COOKIES_FILE` or `YTDLP_COOKIES_FROM_BROWSER`.
-- Spotify URL imports are currently disabled and return `Spotify support is coming soon.`.
+- Spotify URL imports use the Spotify Web API for metadata resolution and then mirror to playable providers. Spotify is not used as a native full-stream playback source.
 - If SoundCloud URL imports fail, set `SOUNDCLOUD_CLIENT_ID` or keep `SOUNDCLOUD_AUTO_CLIENT_ID=1`.
 - Guild configuration data is stored in collection `guild_configs`.
 

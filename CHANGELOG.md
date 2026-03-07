@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.4] - 2026-03-07
+
+- Spotify URL import and mirroring:
+  - added Spotify Web API metadata resolution for track, album, playlist, and artist URLs
+  - introduced Spotify mirror selection that prefers Deezer matches when `DEEZER_ARL` is configured, then falls back to YouTube
+  - added Spotify-specific track metadata fields and player wiring for mirrored resolution paths
+  - documented Spotify credentials and current non-native playback model in README and architecture/config docs
+- YouTube seek startup reliability:
+  - increased initial playback startup timeout for large seek offsets so long YouTube seeks have more time to produce their first audio chunk
+  - added targeted regression coverage for large-offset seek startup timeout behavior
+
 ## [0.4.3] - 2026-03-06
 
 - Project modularity refactor:
