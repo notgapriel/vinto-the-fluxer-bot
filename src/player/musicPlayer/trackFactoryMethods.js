@@ -17,6 +17,7 @@ export const trackFactoryMethods = {
     spotifyTrackId = null,
     spotifyPreviewUrl = null,
     isPreview = false,
+    isLive = false,
     seekStartSec = 0,
   }) {
     const normalizedThumbnail = normalizeThumbnailUrl(thumbnailUrl) ?? buildYouTubeThumbnailFromUrl(url);
@@ -40,6 +41,7 @@ export const trackFactoryMethods = {
       spotifyTrackId: spotifyTrackId ? String(spotifyTrackId) : null,
       spotifyPreviewUrl: normalizedSpotifyPreview,
       isPreview: Boolean(isPreview),
+      isLive: Boolean(isLive),
       queuedAt: Date.now(),
       seekStartSec: Math.max(0, Number.parseInt(String(seekStartSec), 10) || 0),
     };

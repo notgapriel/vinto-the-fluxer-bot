@@ -16,6 +16,10 @@ All notable changes to this project are documented in this file.
   - added yt-dlp JSON metadata fallback for single YouTube URL resolution when `play-dl.video_info()` fails
   - preserved the existing `Unknown` fallback only for cases where both resolvers fail
   - added regression coverage for cloud-style single-link resolution failures that still have valid yt-dlp metadata
+- Radio stream URL support:
+  - added generic live-stream detection for direct `audio/*` responses and simple `m3u`/`pls` radio playlist links
+  - resolved radio links into dedicated live tracks and routed playback through direct HTTP ffmpeg streaming instead of `play-dl`
+  - marked live radio tracks as non-seekable and added targeted playback/resolver coverage
 
 ## [0.4.3] - 2026-03-06
 

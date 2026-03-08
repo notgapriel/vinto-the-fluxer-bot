@@ -401,6 +401,7 @@ export class MusicPlayer extends EventEmitter {
 
   canSeekCurrentTrack() {
     if (!this.currentTrack) return false;
+    if (this.currentTrack.isLive) return false;
     return isYouTubeUrl(this.currentTrack.url);
   }
 
@@ -553,6 +554,8 @@ export class MusicPlayer extends EventEmitter {
 
       if (isYouTubeUrl(track.url)) {
         await this._startYouTubePipeline(track.url, track.seekStartSec ?? 0);
+      } else if (track?.isLive || String(track.source ?? '').startsWith('radio')) {
+        await this._startHttpUrlPipeline(track.url, 0);
       } else if (String(track.source ?? '').startsWith('audius')) {
         await this.sources.audius.startPipeline(track, track.seekStartSec ?? 0);
       } else if (track?.deezerTrackId || String(track.source ?? '').startsWith('deezer-direct')) {
@@ -943,6 +946,7 @@ export class MusicPlayer extends EventEmitter {
       spotifyTrackId: data?.spotifyTrackId ?? data?.spotify_track_id ?? null,
       spotifyPreviewUrl: data?.spotifyPreviewUrl ?? data?.spotify_preview_url ?? null,
       isPreview: data?.isPreview ?? data?.is_preview ?? false,
+      isLive: data?.isLive ?? data?.is_live ?? false,
     });
   }
 
@@ -1312,6 +1316,14 @@ export class MusicPlayer extends EventEmitter {
     });
 
     this.sourceStream.pipe(this.ffmpeg.stdin);
+  }
+
+  async _startHttpUrlPipeline(url, seekSec = 0) {
+    this.ffmpeg = await this._spawnProcess(this.ffmpegBin, this._ffmpegHttpArgs(url, seekSec), {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    this._bindPipelineErrorHandler(this.ffmpeg.stdout, 'ffmpeg.stdout');
   }
 
   async _startYouTubePipeline(url, seekSec = 0) {

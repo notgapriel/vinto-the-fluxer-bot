@@ -8,6 +8,73 @@ import {
   toDurationLabel,
 } from './trackUtils.js';
 
+function isRadioPlaylistContentType(contentType) {
+  const normalized = String(contentType ?? '').toLowerCase();
+  return (
+    normalized.includes('audio/x-mpegurl')
+    || normalized.includes('audio/mpegurl')
+    || normalized.includes('application/vnd.apple.mpegurl')
+    || normalized.includes('application/x-mpegurl')
+    || normalized.includes('audio/x-scpls')
+    || normalized.includes('application/pls+xml')
+    || normalized.includes('application/x-scpls')
+  );
+}
+
+function isAudioStreamContentType(contentType) {
+  const normalized = String(contentType ?? '').toLowerCase();
+  return (
+    normalized.startsWith('audio/')
+    || normalized.includes('application/ogg')
+    || normalized.includes('application/octet-stream')
+  );
+}
+
+function isLikelyPlaylistUrl(value) {
+  const normalized = String(value ?? '').toLowerCase();
+  return normalized.includes('.m3u') || normalized.includes('.m3u8') || normalized.includes('.pls');
+}
+
+function extractFirstHttpLine(lines) {
+  for (const line of lines) {
+    const trimmed = String(line ?? '').trim();
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  }
+  return null;
+}
+
+function parseRadioPlaylistBody(body) {
+  const text = String(body ?? '');
+  if (!text.trim()) return null;
+
+  const lines = text.split(/\r?\n/);
+  const direct = extractFirstHttpLine(lines);
+  if (direct) return direct;
+
+  for (const line of lines) {
+    const match = String(line ?? '').match(/^File\d+=(https?:\/\/.+)$/i);
+    if (match?.[1]) return match[1].trim();
+  }
+
+  return null;
+}
+
+function buildRadioTitle(url, headers) {
+  for (const key of ['icy-name', 'ice-name', 'x-audiocast-name']) {
+    const value = String(headers?.get?.(key) ?? '').trim();
+    if (value) return value;
+  }
+
+  try {
+    const parsed = new URL(url);
+    const host = String(parsed.hostname ?? '').trim();
+    return host ? `${host} Live` : 'Live Radio';
+  } catch {
+    return 'Live Radio';
+  }
+}
+
 export const urlResolverMethods = {
   async _resolveSpotifyTrack(_url, _requestedBy) {
     if (!this.enableSpotifyImport) {
@@ -56,6 +123,11 @@ export const urlResolverMethods = {
   },
 
   async _resolveSingleUrlTrack(url, requestedBy) {
+    const radioTrack = await this._resolveRadioStreamTrack(url, requestedBy).catch(() => null);
+    if (radioTrack) {
+      return [radioTrack];
+    }
+
     try {
       const info = await playdl.video_info(url);
       return [this._buildTrack({
@@ -75,6 +147,61 @@ export const urlResolverMethods = {
         source: 'url',
       })];
     }
+  },
+
+  async _resolveRadioStreamTrack(url, requestedBy, seen = null) {
+    const visited = seen instanceof Set ? seen : new Set();
+    const normalizedUrl = String(url ?? '').trim();
+    if (!normalizedUrl || visited.has(normalizedUrl)) return null;
+    visited.add(normalizedUrl);
+
+    const response = await fetch(normalizedUrl, {
+      method: 'GET',
+      redirect: 'follow',
+      headers: {
+        'Icy-MetaData': '1',
+      },
+      signal: AbortSignal.timeout(10_000),
+    }).catch(() => null);
+
+    if (!response?.ok) {
+      return null;
+    }
+
+    const contentType = String(response.headers.get('content-type') ?? '').toLowerCase();
+    const finalUrl = String(response.url ?? normalizedUrl).trim() || normalizedUrl;
+
+    if (isRadioPlaylistContentType(contentType) || isLikelyPlaylistUrl(finalUrl)) {
+      const playlistBody = await response.text().catch(() => '');
+      const nestedUrl = parseRadioPlaylistBody(playlistBody);
+      if (!nestedUrl || !isHttpUrl(nestedUrl)) return null;
+      return this._resolveRadioStreamTrack(nestedUrl, requestedBy, visited);
+    }
+
+    if (!isAudioStreamContentType(contentType) && !response.headers.get('icy-name')) {
+      try {
+        await response.body?.cancel?.();
+      } catch {
+        // ignore early body cancellation errors
+      }
+      return null;
+    }
+
+    try {
+      await response.body?.cancel?.();
+    } catch {
+      // ignore early body cancellation errors
+    }
+
+    const title = buildRadioTitle(finalUrl, response.headers);
+    return this._buildTrack({
+      title,
+      url: finalUrl,
+      duration: 'Live',
+      requestedBy,
+      source: 'radio-stream',
+      isLive: true,
+    });
   },
 
   async _resolveSoundCloudByGuess(url, requestedBy) {
