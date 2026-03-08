@@ -76,17 +76,18 @@ export async function fetchGlobalGuildAndUserCounts(rest) {
   }
 
   const guilds = [];
-  let before = null;
+  let after = null;
 
   for (let page = 0; page < 100; page += 1) {
-    const chunk = await rest.listCurrentUserGuilds({ limit: 200, before, withCounts: true }).catch(() => null);
+    const chunk = await rest.listCurrentUserGuilds({ limit: 200, after, withCounts: true }).catch(() => null);
     if (!Array.isArray(chunk) || !chunk.length) break;
+
     guilds.push(...chunk);
     if (chunk.length < 200) break;
 
     const lastId = chunk[chunk.length - 1]?.id;
     if (!lastId) break;
-    before = String(lastId);
+    after = String(lastId);
   }
 
   const guildById = new Map();

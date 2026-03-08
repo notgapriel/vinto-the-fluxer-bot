@@ -19,16 +19,16 @@ export async function runWeeklyRecapSweep(router) {
   if (!router.rest?.listCurrentUserGuilds || !router.library?.buildGuildRecap) return;
 
   const guilds = [];
-  let before = null;
+  let after = null;
   for (let page = 0; page < 100; page += 1) {
-    const chunk = await router.rest.listCurrentUserGuilds({ limit: 200, before }).catch(() => []);
+    const chunk = await router.rest.listCurrentUserGuilds({ limit: 200, after }).catch(() => []);
     if (!Array.isArray(chunk) || chunk.length === 0) break;
     guilds.push(...chunk);
     if (chunk.length < 200) break;
 
     const lastId = chunk[chunk.length - 1]?.id;
     if (!lastId) break;
-    before = String(lastId);
+    after = String(lastId);
   }
 
   for (const guild of guilds) {
