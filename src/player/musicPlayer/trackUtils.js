@@ -160,6 +160,16 @@ export function isAppleMusicUrl(value) {
   }
 }
 
+export function isAmazonMusicUrl(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    return host === 'music.amazon.com' || /^music\.amazon\.[a-z.]+$/i.test(host);
+  } catch {
+    return false;
+  }
+}
+
 export function extractAppleMusicEntity(value) {
   try {
     const parsed = new URL(value);
@@ -191,6 +201,67 @@ export function extractAppleMusicEntity(value) {
       id,
       countryCode,
       trackId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function extractAmazonMusicEntity(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    if (host !== 'music.amazon.com' && !/^music\.amazon\.[a-z.]+$/i.test(host)) return null;
+
+    const segments = String(parsed.pathname ?? '')
+      .split('/')
+      .map((segment) => decodeURIComponent(segment).trim())
+      .filter(Boolean);
+
+    if (!segments.length) return null;
+
+    const typeMap = new Map([
+      ['artists', 'artist'],
+      ['artist', 'artist'],
+      ['albums', 'album'],
+      ['album', 'album'],
+      ['playlists', 'playlist'],
+      ['playlist', 'playlist'],
+      ['user-playlists', 'playlist'],
+      ['tracks', 'track'],
+      ['track', 'track'],
+    ]);
+
+    let type = null;
+    let id = null;
+
+    for (let i = 0; i < segments.length; i += 1) {
+      const normalized = typeMap.get(segments[i].toLowerCase());
+      if (!normalized) continue;
+      type = normalized;
+      id = String(segments[i + 1] ?? '').trim() || null;
+      break;
+    }
+
+    const trackId = String(parsed.searchParams.get('trackAsin') ?? '').trim() || null;
+    if (trackId) {
+      return {
+        type: 'track',
+        id: trackId,
+        trackId,
+      };
+    }
+
+    if (!type && segments.length === 1) {
+      type = 'track';
+      id = segments[0];
+    }
+
+    if (!type || !id) return null;
+    return {
+      type,
+      id,
+      trackId: trackId || null,
     };
   } catch {
     return null;

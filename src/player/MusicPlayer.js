@@ -52,6 +52,7 @@ import {
   extractDeezerTrackId,
   getYouTubePlaylistId,
   inferYouTubeWatchUrlFromPlaylist,
+  isAmazonMusicUrl,
   isAppleMusicUrl,
   isAudiusUrl,
   isDeezerUrl,
@@ -803,6 +804,9 @@ export class MusicPlayer extends EventEmitter {
         }
         if (isSpotifyUrl(url)) {
           return this.sources.resolver.resolveSpotifyByGuess(url, requestedBy);
+        }
+        if (isAmazonMusicUrl(url)) {
+          return this.sources.resolver.resolveAmazonByGuess(url, requestedBy);
         }
         if (isAppleMusicUrl(url)) {
           return this.sources.resolver.resolveAppleByGuess(url, requestedBy);

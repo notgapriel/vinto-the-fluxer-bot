@@ -15,6 +15,10 @@ export class ResolverClient {
     return this.host._resolveAppleTrack(url, requestedBy);
   }
 
+  resolveAmazonTrack(url, requestedBy) {
+    return this.host._resolveAmazonTrack(url, requestedBy);
+  }
+
   resolveSpotifyCollection(url, requestedBy) {
     return this.host._resolveSpotifyCollection(url, requestedBy);
   }
@@ -23,12 +27,20 @@ export class ResolverClient {
     return this.host._resolveAppleCollection(url, requestedBy);
   }
 
+  resolveAmazonCollection(url, requestedBy) {
+    return this.host._resolveAmazonCollection(url, requestedBy);
+  }
+
   resolveSpotifyByGuess(url, requestedBy) {
     return this.host._resolveSpotifyByGuess(url, requestedBy);
   }
 
   resolveAppleByGuess(url, requestedBy) {
     return this.host._resolveAppleByGuess(url, requestedBy);
+  }
+
+  resolveAmazonByGuess(url, requestedBy) {
+    return this.host._resolveAmazonByGuess(url, requestedBy);
   }
 
   resolveFallback(url, requestedBy, source) {
