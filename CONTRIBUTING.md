@@ -34,6 +34,12 @@ Copy-Item .env.example .env
 - `BOT_TOKEN`
 - `MONGODB_URI`
 
+For realistic local runs, also verify:
+
+- `API_BASE` and `GATEWAY_URL` still point to the intended Fluxer endpoints
+- `ffmpeg` is available
+- `yt-dlp` is installed if you want reliable YouTube playback/testing
+
 4. Start development mode:
 
 ```bash
@@ -49,6 +55,8 @@ npm test
 ```
 
 If you touched command parsing, queue logic, or session lifecycle, add targeted tests in `test/`.
+
+If you changed runtime behavior, commands, persistence, or env vars, update the relevant Markdown docs in the same change.
 
 ## Pull Request Checklist
 

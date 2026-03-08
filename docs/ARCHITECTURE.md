@@ -2,72 +2,125 @@
 
 ## Runtime Overview
 
-The bot is split into clear layers:
+The bot is split into a few clear runtime layers:
 
-- `src/index.js`: process bootstrap and startup sequence
-- `src/app/bootstrap.js`: composes all runtime dependencies
-- `src/gateway.js`: websocket lifecycle with reconnect/resume
-- `src/rest.js`: API transport wrapper with retry and timeout handling
-- `src/bot/`: command router, command registry, guild sessions, domain services
-- `src/player/`: queue model and playback pipeline
-- `src/voice/`: LiveKit connection and PCM frame publishing
-- `src/storage/`: MongoDB connectivity and collections
-- `src/monitoring/`: readiness, health, metrics, and Sentry hooks
+- `src/index.js`: process entrypoint and top-level startup error handling
+- `src/app/bootstrap.js`: config loading, dependency wiring, monitoring, presence rotation, graceful shutdown
+- `src/gateway.js`: websocket lifecycle, heartbeat handling, reconnect, resume, presence updates, voice state dispatch
+- `src/rest.js`: authenticated REST client with retry, timeout, and rate-limit handling
+- `src/bot/`: command router, command registry, guild sessions, permission checks, state stores, and domain services
+- `src/player/`: queue model, resolver pipeline, ffmpeg/yt-dlp processing, playback control, and provider-specific source logic
+- `src/voice/`: LiveKit-based PCM publishing
+- `src/storage/`: MongoDB connectivity
+- `src/monitoring/`: health, readiness, Prometheus metrics, and optional Sentry integration
 
-## Command Flow (High Level)
+## Fluxer Runtime Assumptions
 
-1. Gateway receives `MESSAGE_CREATE`.
-2. `commandRouter` parses prefix/command and checks permissions/rate limits.
-3. Matching command handler resolves tracks and applies business logic.
-4. `sessionManager` selects or creates a guild playback session.
-5. `MusicPlayer` updates queue and coordinates playback pipeline.
-6. `VoiceConnection` publishes PCM frames to LiveKit.
-7. Relevant data is persisted through guild config/music library stores.
+The bot is built for Fluxer and targets the official Fluxer REST and Gateway endpoints by default.
+
+Operationally that means:
+
+- runtime API calls go through the Fluxer REST API
+- websocket events come from the Fluxer Gateway
+- voice publishing uses the LiveKit-based flow implemented in `src/voice/VoiceConnection.js`
+
+## Startup Flow
+
+1. `loadConfig()` validates environment variables.
+2. DNS result ordering is configured.
+3. Media auth bootstrap runs for `play-dl` provider support.
+4. Optional Sentry integration is initialized.
+5. MongoDB connects and background health pings start.
+6. Guild config store and music library store initialize indexes.
+7. The bot resolves the Gateway URL, either from config or REST discovery.
+8. REST connectivity is verified unless `GATEWAY_ONLY_MODE=1`.
+9. Gateway, session manager, monitoring server, command router, and presence rotation are started.
+
+## Command Flow
+
+1. Gateway emits `MESSAGE_CREATE`.
+2. `CommandRouter` parses the prefix and command name.
+3. Rate limits, permissions, guild context, and command-specific preconditions are checked.
+4. The command resolves or creates a guild session through `SessionManager`.
+5. `MusicPlayer` resolves tracks, mutates queue state, and starts or updates playback.
+6. `VoiceConnection` publishes PCM frames into the platform voice session.
+7. Persistent features write through Mongo-backed stores where needed.
 
 ## Playback Resolution Strategy
 
-The player resolves input in this order:
+Resolution is intentionally layered:
 
 1. Plain text query:
    - Deezer search first when `DEEZER_ARL` is configured and Deezer import is enabled
-   - otherwise YouTube search
-2. Known provider URL types via `play-dl` validation:
-   - YouTube video/playlist
-   - SoundCloud track/playlist
-   - Spotify track/album/playlist
-   - Deezer track/album/playlist
-3. Provider-specific direct URL resolution by URL pattern:
-   - Audius
-   - Spotify artist URLs
-   - SoundCloud fallback URL patterns
-   - Deezer fallback URL patterns
-4. Generic URL fallback by direct metadata lookup or YouTube search
+   - then YouTube fallback when enabled
+2. Known provider URLs:
+   - YouTube video or playlist
+   - SoundCloud track or playlist
+   - Spotify track, album, playlist, artist
+   - Apple Music song, album, artist
+   - Deezer track, album, playlist
+   - Audius links
+   - direct radio stream URLs and lightweight playlist formats such as `m3u` and `pls`
+3. Generic URL fallback:
+   - provider-specific metadata lookup when possible
+   - otherwise a best-effort fallback search path
 
 Playback path notes:
 
-- Deezer: direct media URL resolution with encrypted-stream handling and resume/retry fallback.
-- SoundCloud: direct API/transcoding playback path.
-- Audius: direct API playback path.
-- Spotify: metadata resolver only. Track, album, playlist, and artist URLs are resolved through the Spotify Web API, then mirrored to a playable provider. Current mirror preference is Deezer first, then YouTube fallback.
-- Generic fallback resolution can still map to YouTube search when a provider URL cannot be resolved directly.
+- YouTube uses ffmpeg plus yt-dlp/play-dl resolution paths depending on the input and resolver mode.
+- SoundCloud and Audius use direct API-backed playback paths.
+- Deezer can use direct media URL resolution when `DEEZER_ARL` is available.
+- Spotify and Apple Music are metadata resolvers only. They are mirrored to Deezer first when possible, otherwise YouTube.
+- Radio streams are treated as live sources and are not seekable.
 
-## Data Model Notes
+## Session and Voice Lifecycle
 
-MongoDB stores:
+`SessionManager` owns one playback session per guild. Each session contains:
 
-- `guild_configs`: prefix, DJ roles, vote-skip and other guild settings
+- a `VoiceConnection`
+- a `MusicPlayer`
+- effective guild settings
+- vote-skip state
+- idle timeout state
+- optional playback diagnostics state
+
+Important behavior:
+
+- idle sessions are destroyed after `SESSION_IDLE_MS` unless 24/7 mode is enabled
+- vote-skip state resets per track
+- playback diagnostics can log periodic player and transport snapshots
+- queue-end behavior can still disconnect after idle timeout even if listeners remain, unless 24/7 mode is enabled
+
+## Data Model
+
+MongoDB collections used by the current code:
+
+- `guild_configs`: prefix, dedupe, 24/7, vote-skip settings, DJ roles, music log channel
 - `guild_playlists`: saved guild playlists
-- user favorites and playback history collections (managed by music library store)
+- `user_favorites`: per-user favorites
+- `guild_history`: recent played-track history per guild
+- `guild_features`: queue templates, queue guard config, voice profiles, webhook URL, recap channel, session panel state
+- `user_profiles`: lightweight taste memory and guild-level reputation stats
+- `guild_recaps`: recap send-state metadata
 
-In-memory caches reduce DB load for hot guild config reads.
+The guild config store keeps a TTL cache in memory to reduce repeated reads for hot guilds.
 
-## Reliability and Operations
+## Monitoring and Reliability
 
-- Gateway and REST clients use retry/backoff patterns.
-- Graceful shutdown handles active sessions on `SIGINT` and `SIGTERM`.
+- Gateway reconnects with exponential backoff and resumes sessions when possible.
+- REST requests retry on retryable failures and respect route/global rate limits.
+- Mongo health is tracked with recurring ping checks.
 - Monitoring endpoints:
   - `/healthz`
   - `/readyz`
   - `/metrics`
-- Optional Sentry reporting can capture unhandled runtime exceptions.
+- Shutdown handles active sessions, monitoring server, MongoDB, and Sentry flushing.
 
+## Practical Self-Hosting Implication
+
+For normal Fluxer self-hosting, the operator-managed pieces are mainly:
+
+- bot token and env configuration
+- MongoDB
+- `ffmpeg`
+- usually `yt-dlp`
