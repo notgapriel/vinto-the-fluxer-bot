@@ -150,6 +150,53 @@ export function isSpotifyUrl(value) {
   }
 }
 
+export function isAppleMusicUrl(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    return host === 'music.apple.com' || host.endsWith('.music.apple.com');
+  } catch {
+    return false;
+  }
+}
+
+export function extractAppleMusicEntity(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    if (host !== 'music.apple.com' && !host.endsWith('.music.apple.com')) return null;
+
+    const segments = String(parsed.pathname ?? '')
+      .split('/')
+      .map((segment) => decodeURIComponent(segment).trim())
+      .filter(Boolean);
+
+    if (!segments.length) return null;
+
+    const knownTypes = new Set(['album', 'playlist', 'artist', 'song']);
+    let typeIndex = segments.findIndex((segment) => knownTypes.has(segment.toLowerCase()));
+    if (typeIndex < 0 && segments.length >= 2 && /^[a-z]{2}$/i.test(segments[0])) {
+      typeIndex = segments.findIndex((segment, index) => index > 0 && knownTypes.has(segment.toLowerCase()));
+    }
+    if (typeIndex < 0) return null;
+
+    const type = segments[typeIndex].toLowerCase();
+    const id = String(segments[typeIndex + 2] ?? segments[segments.length - 1] ?? '').trim();
+    const countryCode = /^[a-z]{2}$/i.test(segments[0]) ? segments[0].toUpperCase() : null;
+    const trackId = String(parsed.searchParams.get('i') ?? '').trim() || null;
+    if (!id) return null;
+
+    return {
+      type,
+      id,
+      countryCode,
+      trackId,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function extractSpotifyEntity(value) {
   try {
     const parsed = new URL(value);

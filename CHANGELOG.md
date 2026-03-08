@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.5] - 2026-03-08
+
+- Fluxer guild and presence fixes:
+  - fixed global guild pagination to use the correct `after` cursor so bot-wide guild counts continue past the first 200 entries
+  - aligned startup and rotating gateway presence handling with Fluxer custom status payloads
+  - initialized presence from real guild counts instead of leaving the bot stuck on a placeholder startup status
+- Apple Music mirroring:
+  - added Apple Music URL detection for song, album, and artist links
+  - resolved Apple Music metadata through public lookup/fallback page parsing and mirrored playable results to Deezer or YouTube
+  - added targeted regression coverage for Apple Music single-track and collection resolution paths
+
 ## [0.4.4] - 2026-03-07
 
 - Spotify URL import and mirroring:
