@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.6] - 2026-03-08
+
+- Radio now-playing recognition and live-stream UX:
+  - added radio now-playing detection from ICY metadata with optional AudD fallback via `AUDD_API_TOKEN`
+  - upgraded radio `now` output to show the detected live song and recognition source
+  - added a subtle support footer on radio recognition embeds because that lookup path has ongoing API cost
+  - changed `play` so active radio/live playback is interrupted immediately and the new track or stream starts next instead of waiting in queue
+  - normalized live progress labeling from `live/unknown` to `Live`
+- Docs and branding refresh:
+  - reworked README styling with badges, tables, collapsible setup sections, and project links
+  - added repository logo and official website link to the README
+  - rewrote self-hosting docs around the expected Fluxer deployment path
+  - aligned configuration, architecture, support, contribution, privacy, and terms docs with the current codebase and stored data model
+
 ## [0.4.5] - 2026-03-08
 
 - Fluxer guild and presence fixes:
