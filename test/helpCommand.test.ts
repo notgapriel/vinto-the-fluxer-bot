@@ -68,6 +68,12 @@ test('help command sends paginated embed payload', async () => {
     .map((page: HelpPayload) => page?.embeds?.[0]?.description ?? '')
     .join('\n');
   assert.match(combinedDescriptions, /`!help`/);
+
+  for (const { embeds } of (registeredPagination as HelpPaginationRegistration).pages) {
+    for (const { description } of embeds) {
+      assert.ok(!description?.includes("popcorn"));
+    }
+  }
 });
 
 
