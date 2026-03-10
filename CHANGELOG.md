@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.8] - 2026-03-10
+
+- Spotify playlist mirroring fix:
+  - preserved artist metadata when Spotify tracks are mirrored to YouTube so playlist and album imports use `artist - title` searches instead of title-only lookups
+  - normalized Spotify mirror duration handoff to avoid feeding formatted duration labels back through the preview-length fallback path
+  - added targeted regression coverage for Spotify playlist collection mirroring
+
 ## [0.4.7] - 2026-03-09
 
 - Amazon Music mirroring:
