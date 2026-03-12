@@ -131,7 +131,7 @@ If you use an external MongoDB instead of the bundled container, set:
 MONGODB_URI=mongodb://user:password@your-mongo-host:27017
 ```
 
-The container image already installs `ffmpeg` and `yt-dlp`, so YouTube playback dependencies are present inside the app container.
+The container image already installs `ffmpeg` and the standalone `yt-dlp` package, so YouTube playback dependencies are present inside the app container.
 
 ## Recommended Setups
 

@@ -139,7 +139,7 @@ export function normalizePlaybackError(player, err) {
     return new Error('yt-dlp is not available. Install yt-dlp or set YTDLP_BIN.');
   }
   if (isYtDlpModuleMissingError(err)) {
-    return new Error('yt-dlp Python module is missing. Install it with `python -m pip install yt-dlp` or set YTDLP_BIN to yt-dlp.exe.');
+    return new Error('yt-dlp is missing. Install the standalone `yt-dlp` binary or set YTDLP_BIN to its path.');
   }
   if (isConnectionRefusedError(err)) {
     return new Error('Network connection refused during media fetch. Check proxy env vars (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY) and remove localhost:9 mappings.');

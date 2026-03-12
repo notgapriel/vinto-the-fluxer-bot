@@ -1,10 +1,10 @@
 FROM node:20-bookworm-slim
 
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg python3 python3-pip ca-certificates \
-  && python3 -m pip install --no-cache-dir --break-system-packages yt-dlp \
+  && apt-get install -y --no-install-recommends ffmpeg yt-dlp ca-certificates \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
