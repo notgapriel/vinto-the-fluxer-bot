@@ -85,6 +85,13 @@ import {
   stopVoiceStream,
 } from './musicPlayer/processUtils.js';
 
+class PlaybackStartupAbortedError extends Error {
+  constructor(message = 'Playback startup aborted.') {
+    super(message);
+    this.name = 'PlaybackStartupAbortedError';
+  }
+}
+
 export class MusicPlayer extends EventEmitter {
   constructor(voice, options = {}) {
     super();
@@ -168,6 +175,7 @@ export class MusicPlayer extends EventEmitter {
     this.lastKnownTrack = null;
     this.lastKnownTrackAtMs = 0;
     this.activePlaybackToken = 0;
+    this.playbackStartupToken = 0;
     this.soundcloudClientIdResolvedAt = this.soundcloudClientId ? Date.now() : 0;
 
     this._lastYtDlpDiagnostics = null;
@@ -363,6 +371,7 @@ export class MusicPlayer extends EventEmitter {
   replayCurrentTrack() {
     if (!this.currentTrack || !this.playing) return false;
     this.pendingSeekTrack = this._cloneTrack(this.currentTrack, { seekStartSec: 0 });
+    this._invalidatePlaybackStartup();
     this.skipRequested = true;
     this._stopVoiceStream();
     this._cleanupProcesses();
@@ -375,6 +384,7 @@ export class MusicPlayer extends EventEmitter {
     // Mid-track seek restarts are significantly more likely to trigger YouTube challenge failures.
     // For effect reprocessing, prefer a clean restart from 0 for stability.
     this.pendingSeekTrack = this._cloneTrack(this.currentTrack, { seekStartSec: 0 });
+    this._invalidatePlaybackStartup();
     this.skipRequested = true;
     this._stopVoiceStream();
     this._cleanupProcesses();
@@ -426,6 +436,7 @@ export class MusicPlayer extends EventEmitter {
       seekStartSec: target,
     };
 
+    this._invalidatePlaybackStartup();
     this.skipRequested = true;
     this._stopVoiceStream();
     this._cleanupProcesses();
@@ -539,6 +550,8 @@ export class MusicPlayer extends EventEmitter {
   async play() {
     if (this.playing) return;
 
+    this._cleanupProcesses();
+
     const track = this.queue.next();
     if (!track) {
       this._stopVoiceStream();
@@ -546,13 +559,14 @@ export class MusicPlayer extends EventEmitter {
       return;
     }
     const playbackToken = ++this.activePlaybackToken;
+    const startupToken = this._beginPlaybackStartup();
 
     this.playing = true;
     this.paused = false;
     this.skipRequested = false;
 
     try {
-      this._clearPipelineState();
+      this._ensurePlaybackStartupActive(startupToken);
 
       if (isYouTubeUrl(track.url)) {
         await this._startYouTubePipeline(track.url, track.seekStartSec ?? 0);
@@ -567,22 +581,30 @@ export class MusicPlayer extends EventEmitter {
       } else {
         await this._startPlayDlPipeline(track.url, 0);
       }
+      this._ensurePlaybackStartupActive(startupToken);
+
+      const ffmpegProc = this.ffmpeg;
+      if (!ffmpegProc?.stdout?.pipe || !ffmpegProc?.once) {
+        throw new Error('Playback pipeline did not initialize ffmpeg output.');
+      }
 
       let playbackStarted = false;
-      this.ffmpeg.once('close', async (code, signal) => {
+      ffmpegProc.once('close', async (code, signal) => {
         if (!playbackStarted) return;
         await this._handleTrackClose(track, code, signal, playbackToken);
       });
 
       this.liveAudioProcessor = this._createLiveAudioProcessor();
       this._bindPipelineErrorHandler(this.liveAudioProcessor, 'liveAudioProcessor');
-      this.ffmpeg.stdout.pipe(this.liveAudioProcessor);
+      ffmpegProc.stdout.pipe(this.liveAudioProcessor);
       await this.voice.sendAudio(this.liveAudioProcessor);
+      this._ensurePlaybackStartupActive(startupToken);
       await this._awaitInitialPlaybackChunk(
         this.liveAudioProcessor,
-        this.ffmpeg,
+        ffmpegProc,
         this._getInitialPlaybackChunkTimeoutMs(track)
       );
+      this._ensurePlaybackStartupActive(startupToken);
       playbackStarted = true;
       this._startPlaybackClock(track.seekStartSec ?? 0);
       this.lastKnownTrack = track;
@@ -590,9 +612,20 @@ export class MusicPlayer extends EventEmitter {
       this.emit('trackStart', track);
       this.logger?.info?.('Playback started', { title: track.title, url: track.url, seek: track.seekStartSec ?? 0 });
     } catch (err) {
-      const normalized = this._normalizePlaybackError(err);
-      this.emit('trackError', { track, error: normalized });
-      this.logger?.error?.('Playback setup failed', { track: track.title, error: normalized.message });
+      const startupAborted = this._isPlaybackStartupAbortedError(err);
+      if (!startupAborted) {
+        const normalized = this._normalizePlaybackError(err);
+        this.emit('trackError', { track, error: normalized });
+        this.logger?.error?.('Playback setup failed', { track: track.title, error: normalized.message });
+      } else {
+        this.logger?.debug?.('Playback startup aborted before first audio chunk', {
+          title: track?.title ?? null,
+          url: track?.url ?? null,
+        });
+      }
+
+      const pendingSeekTrack = this.pendingSeekTrack;
+      this.pendingSeekTrack = null;
 
       this._cleanupProcesses();
       this.playing = false;
@@ -600,13 +633,24 @@ export class MusicPlayer extends EventEmitter {
       this._resetPlaybackClock();
       this.queue.current = null;
 
+      if (startupAborted && pendingSeekTrack) {
+        this.queue.addFront(pendingSeekTrack);
+      }
+
       if (this.queue.pendingSize > 0) {
         await this.play();
         return;
       }
 
       this._stopVoiceStream();
-      this.emit('queueEmpty', { reason: 'startup_error' });
+      if (!startupAborted) {
+        this.emit('queueEmpty', { reason: 'startup_error' });
+        return;
+      }
+
+      if (this.skipRequested || pendingSeekTrack) {
+        this.emit('queueEmpty');
+      }
     }
   }
 
@@ -679,6 +723,7 @@ export class MusicPlayer extends EventEmitter {
 
   skip() {
     if (!this.playing) return false;
+    this._invalidatePlaybackStartup();
     this.skipRequested = true;
     this._stopVoiceStream();
     this._cleanupProcesses();
@@ -686,6 +731,7 @@ export class MusicPlayer extends EventEmitter {
   }
 
   stop() {
+    this._invalidatePlaybackStartup();
     this.skipRequested = true;
     this.pendingSeekTrack = null;
     this.queue.clear();
@@ -1894,6 +1940,25 @@ export class MusicPlayer extends EventEmitter {
 
   _cleanupProcesses() {
     cleanupProcesses(this);
+  }
+
+  _beginPlaybackStartup() {
+    this.playbackStartupToken += 1;
+    return this.playbackStartupToken;
+  }
+
+  _invalidatePlaybackStartup() {
+    this.playbackStartupToken += 1;
+  }
+
+  _ensurePlaybackStartupActive(token) {
+    if (token !== this.playbackStartupToken) {
+      throw new PlaybackStartupAbortedError();
+    }
+  }
+
+  _isPlaybackStartupAbortedError(err) {
+    return err instanceof PlaybackStartupAbortedError;
   }
 
   _clearPipelineState() {
