@@ -15,6 +15,7 @@ import {
   ensureConnectedSession,
   resolveQueueGuard,
   applyVoiceProfileIfConfigured,
+  resolveActiveVoiceChannelOrThrow,
   updateGuildConfig,
   parseOnOff,
   parseRoleId,
@@ -52,9 +53,11 @@ export function registerCommands(registry) {
     ensureGuild,
     getGuildConfigOrThrow,
     updateGuildConfig,
+    requireLibrary,
     parseOnOff,
     parseRoleId,
     parseTextChannelId,
+    resolveActiveVoiceChannelOrThrow,
     ensureManageGuildAccess,
   });
 
