@@ -37,8 +37,8 @@ test('join rejects when guild already reached the max concurrent voice-session l
       },
       listByGuild() {
         return [
-          { sessionId: 'guild-1:voice-1' },
-          { sessionId: 'guild-1:voice-2' },
+          { sessionId: 'guild-1:voice-1', connection: { channelId: 'voice-1' } },
+          { sessionId: 'guild-1:voice-2', connection: { channelId: 'voice-2' } },
         ];
       },
       async ensure() {
@@ -56,4 +56,68 @@ test('join rejects when guild already reached the max concurrent voice-session l
     () => join.execute(ctx),
     /maximum number of active voice sessions \(2\)/i
   );
+});
+
+test('join ignores preview sessions when enforcing the concurrent voice-session limit', async () => {
+  const join = buildJoinCommand();
+  const ensureCalls = [];
+
+  const ctx = {
+    guildId: 'guild-1',
+    channelId: 'text-1',
+    args: [],
+    prefix: '!',
+    guildConfig: {
+      guildId: 'guild-1',
+      settings: {},
+    },
+    config: {
+      prefix: '!',
+      maxConcurrentVoiceChannelsPerGuild: 2,
+    },
+    message: {
+      guild_id: 'guild-1',
+      author: { id: 'user-1' },
+    },
+    voiceStateStore: {
+      resolveMemberVoiceChannel() {
+        return 'voice-2';
+      },
+    },
+    sessions: {
+      has() {
+        return false;
+      },
+      listByGuild() {
+        return [
+          { sessionId: 'guild-1:preview' },
+          { sessionId: 'guild-1:voice-1', connection: { channelId: 'voice-1' } },
+        ];
+      },
+      async ensure(_guildId, _guildConfig, options) {
+        ensureCalls.push(options);
+        return {
+          connection: {
+            connected: true,
+            channelId: options.voiceChannelId,
+            hasUsablePlayer() {
+              return true;
+            },
+          },
+        };
+      },
+      bindTextChannel() {},
+      adoptVoiceChannel() {},
+      async syncPersistentVoiceState() {},
+      async destroy() {},
+    },
+    reply: {
+      async success() {},
+    },
+  };
+
+  await join.execute(ctx);
+
+  assert.equal(ensureCalls.length, 1);
+  assert.equal(ensureCalls[0].voiceChannelId, 'voice-2');
 });

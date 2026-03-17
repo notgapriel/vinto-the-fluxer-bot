@@ -118,7 +118,11 @@ export async function ensureConnectedSession(ctx, explicitChannelId = null) {
   const selector = { voiceChannelId: resolvedVoice };
   const hadSession = ctx.sessions.has(ctx.guildId, selector);
   const concurrentGuildSessions = Array.isArray(ctx.sessions.listByGuild?.(ctx.guildId))
-    ? ctx.sessions.listByGuild(ctx.guildId)
+    ? ctx.sessions.listByGuild(ctx.guildId).filter((session) => {
+      const hasTargetChannel = Boolean(session?.targetVoiceChannelId);
+      const hasConnectedChannel = Boolean(session?.connection?.channelId);
+      return hasTargetChannel || hasConnectedChannel;
+    })
     : [];
   const maxConcurrentVoiceChannels = Number.parseInt(
     String(ctx.config?.maxConcurrentVoiceChannelsPerGuild ?? 5),

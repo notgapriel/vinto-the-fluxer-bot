@@ -307,6 +307,8 @@ test('persistent 24/7 bindings are restored on startup', async () => {
 
   assert.equal(results.length, 1);
   assert.equal(results[0].guildId, '777777');
+  assert.equal(results[0].voiceChannelId, '888888');
+  assert.equal(results[0].textChannelId, '999999');
   assert.equal(results[0].restored, true);
   assert.equal(restored?.connection?.connected, true);
   assert.equal(restored?.connection?.channelId, '888888');
@@ -348,6 +350,40 @@ test('voice profile 24/7 override is applied per voice channel session', async (
   const session = await manager.ensure('191919', null, {
     voiceChannelId: '383838',
     textChannelId: '575757',
+  });
+
+  assert.equal(session.settings.stayInVoiceEnabled, true);
+});
+
+test('guild stay-in-voice setting remains the fallback when no voice profile override exists', async () => {
+  const manager = createManager({
+    guildConfigs: {
+      async get(guildId) {
+        return {
+          guildId,
+          prefix: '!',
+          settings: {
+            dedupeEnabled: false,
+            stayInVoiceEnabled: true,
+            volumePercent: 100,
+            voteSkipRatio: 0.5,
+            voteSkipMinVotes: 2,
+            djRoleIds: [],
+            musicLogChannelId: null,
+          },
+        };
+      },
+    },
+    library: {
+      async getVoiceProfile() {
+        return null;
+      },
+    },
+  });
+
+  const session = await manager.ensure('292929', null, {
+    voiceChannelId: '393939',
+    textChannelId: '494949',
   });
 
   assert.equal(session.settings.stayInVoiceEnabled, true);
@@ -479,6 +515,8 @@ test('missing persistent voice channel is cleared before restore attempt', async
   assert.equal(ensureCalled, false);
   assert.deepEqual(results, [{
     guildId: '777777',
+    voiceChannelId: '888888',
+    textChannelId: '999999',
     restored: false,
     reason: 'voice_channel_missing',
   }]);

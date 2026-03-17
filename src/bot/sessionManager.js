@@ -151,7 +151,7 @@ function settingsFromGuildConfig(config, guildConfig, voiceProfileSettings = nul
     dedupeEnabled: toBool(source.dedupeEnabled, defaults.dedupeEnabled),
     stayInVoiceEnabled: typeof profile.stayInVoiceEnabled === 'boolean'
       ? profile.stayInVoiceEnabled
-      : defaults.stayInVoiceEnabled,
+      : toBool(source.stayInVoiceEnabled, defaults.stayInVoiceEnabled),
     volumePercent: toVolumePercent(source.volumePercent, defaults.volumePercent),
     voteSkipRatio: toRatio(source.voteSkipRatio, defaults.voteSkipRatio),
     voteSkipMinVotes: toPositiveInt(source.voteSkipMinVotes, defaults.voteSkipMinVotes),
@@ -682,7 +682,7 @@ export class SessionManager extends EventEmitter {
       const channelState = await this._inspectPersistentVoiceChannel(guildId, voiceChannelId);
       if (channelState === 'missing') {
         await this._clearPersistentVoiceBinding(guildId, voiceChannelId).catch(() => null);
-        results.push({ guildId, restored: false, reason: 'voice_channel_missing' });
+        results.push({ guildId, voiceChannelId, textChannelId, restored: false, reason: 'voice_channel_missing' });
         continue;
       }
 
@@ -701,7 +701,7 @@ export class SessionManager extends EventEmitter {
           });
         });
         await this.syncPersistentVoiceState(guildId).catch(() => null);
-        results.push({ guildId, restored: true, reason: 'already_connected' });
+        results.push({ guildId, voiceChannelId, textChannelId, restored: true, reason: 'already_connected' });
         continue;
       }
 
@@ -720,7 +720,7 @@ export class SessionManager extends EventEmitter {
           channelId: voiceChannelId,
           textChannelId,
         });
-        results.push({ guildId, restored: true, reason: 'connected' });
+        results.push({ guildId, voiceChannelId, textChannelId, restored: true, reason: 'connected' });
       } catch (err) {
         this.logger?.warn?.('Failed to restore persistent voice session', {
           guildId,
@@ -737,6 +737,8 @@ export class SessionManager extends EventEmitter {
         }
         results.push({
           guildId,
+          voiceChannelId,
+          textChannelId,
           restored: false,
           reason: err instanceof Error ? err.message : String(err),
         });
