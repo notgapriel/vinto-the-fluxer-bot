@@ -41,6 +41,33 @@ export function registerConfigCommands(registry, h) {
   }));
 
   registry.register(createCommand({
+    name: 'volumedefault',
+    aliases: ['volcfg', 'defaultvolume'],
+    description: 'Show or set the default volume for new guild sessions.',
+    usage: 'volumedefault [0-200]',
+    async execute(ctx) {
+      ensureGuild(ctx);
+      const guildConfig = await getGuildConfigOrThrow(ctx);
+      await ensureManageGuildAccess(ctx, 'change the default volume');
+
+      if (!ctx.args.length) {
+        await ctx.reply.info(`Default volume for new sessions is **${guildConfig.settings.volumePercent}%**.`);
+        return;
+      }
+
+      const next = Number.parseInt(String(ctx.args[0] ?? ''), 10);
+      if (!Number.isFinite(next) || next < 0 || next > 200) {
+        throw new ValidationError('Volume must be an integer between 0 and 200.');
+      }
+
+      const updated = await updateGuildConfig(ctx, {
+        settings: { volumePercent: next },
+      });
+      await ctx.reply.success(`Default volume for new sessions set to **${updated.settings.volumePercent}%**.`);
+    },
+  }));
+
+  registry.register(createCommand({
     name: '247',
     aliases: ['stay'],
     description: 'Toggle 24/7 mode for your current voice channel.',
@@ -267,6 +294,7 @@ export function registerConfigCommands(registry, h) {
       await ctx.reply.info('Guild configuration', [
         { name: 'Prefix', value: guildConfig.prefix, inline: true },
         { name: 'Dedupe', value: guildConfig.settings.dedupeEnabled ? 'on' : 'off', inline: true },
+        { name: 'Default Volume', value: `${guildConfig.settings.volumePercent}%`, inline: true },
         { name: '24/7', value: stayInVoiceEnabled ? 'on' : 'off', inline: true },
         { name: 'Vote Ratio', value: String(guildConfig.settings.voteSkipRatio), inline: true },
         { name: 'Vote Min', value: String(guildConfig.settings.voteSkipMinVotes), inline: true },

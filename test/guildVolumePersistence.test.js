@@ -11,9 +11,16 @@ function buildVolumeCommand() {
   return registry.resolve('volume');
 }
 
-test('volume command persists guild volume setting', async () => {
+function buildVolumeDefaultCommand() {
+  const registry = new CommandRegistry();
+  registerCommands(registry);
+  return registry.resolve('volumedefault');
+}
+
+test('volume command only changes the active session volume', async () => {
   const volume = buildVolumeCommand();
   const updates = [];
+  const dirty = [];
 
   await volume.execute({
     guildId: 'guild-1',
@@ -55,6 +62,9 @@ test('volume command persists guild volume setting', async () => {
         };
       },
       applyGuildConfig() {},
+      markSnapshotDirty(session, force) {
+        dirty.push([session.connection.channelId, force]);
+      },
     },
     voiceStateStore: {
       resolveMemberVoiceChannel() {
@@ -63,6 +73,62 @@ test('volume command persists guild volume setting', async () => {
       countUsersInChannel() {
         return 1;
       },
+    },
+    message: {
+      guild_id: 'guild-1',
+      author: { id: 'user-1' },
+      member: { permissions: '32' },
+    },
+    reply: {
+      async success() {},
+    },
+  });
+
+  assert.deepEqual(updates, []);
+  assert.deepEqual(dirty, [['voice-1', true]]);
+});
+
+test('volume default command persists guild default volume', async () => {
+  const volumeDefault = buildVolumeDefaultCommand();
+  const updates = [];
+
+  await volumeDefault.execute({
+    guildId: 'guild-1',
+    authorId: 'user-1',
+    args: ['35'],
+    guildConfig: {
+      guildId: 'guild-1',
+      prefix: '!',
+      settings: {
+        dedupeEnabled: false,
+        stayInVoiceEnabled: false,
+        volumePercent: 100,
+        voteSkipRatio: 0.5,
+        voteSkipMinVotes: 2,
+        djRoleIds: [],
+        musicLogChannelId: null,
+      },
+    },
+    guildConfigs: {
+      async update(guildId, patch) {
+        updates.push({ guildId, patch });
+        return {
+          guildId,
+          prefix: '!',
+          settings: {
+            dedupeEnabled: false,
+            stayInVoiceEnabled: false,
+            volumePercent: patch.settings.volumePercent,
+            voteSkipRatio: 0.5,
+            voteSkipMinVotes: 2,
+            djRoleIds: [],
+            musicLogChannelId: null,
+          },
+        };
+      },
+    },
+    sessions: {
+      applyGuildConfig() {},
     },
     message: {
       guild_id: 'guild-1',

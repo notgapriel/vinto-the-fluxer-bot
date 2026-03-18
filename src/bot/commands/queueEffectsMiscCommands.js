@@ -482,13 +482,6 @@ export function registerQueueEffectsAndMiscCommands(registry) {
       }
 
       const next = session.player.setVolumePercent(ctx.args[0]);
-      if (ctx.guildConfigs) {
-        await updateGuildConfig(ctx, {
-          settings: {
-            volumePercent: next,
-          },
-        });
-      }
       ctx.sessions.markSnapshotDirty?.(session, true);
       await ctx.reply.success(`Volume set to **${next}%**.`);
     },
