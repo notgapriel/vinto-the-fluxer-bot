@@ -13,7 +13,7 @@ export function getSessionOrThrow(ctx) {
     textChannelId: ctx.channelId,
   });
   if (!session) {
-    throw new ValidationError('No active player in this guild.');
+    throw new ValidationError('No active player in this channel.');
   }
   return session;
 }

@@ -239,7 +239,7 @@ registry.register(createCommand({
         voiceChannelId: existing?.connection?.channelId ?? ctx.activeVoiceChannelId,
       });
       if (!removed) {
-        await ctx.reply.warning('No active player in this guild.');
+        await ctx.reply.warning('No active player in this channel.');
         return;
       }
 
