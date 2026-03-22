@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.1] - 2026-03-22
+
+- Playlist startup and queue UX:
+  - started external playlists and YouTube mixes from the first playable track immediately, then loaded the remaining tracks in the background
+  - added fast-path handling for YouTube `RD` / `RDMM` mix links so the visible watch track starts instantly
+  - hydrated fast-start mix placeholders with real metadata after playback begins and suppressed placeholder `Now playing` follow-up messages
+  - cleaned up queue and now-playing formatting, added clickable `Now Playing` links, moved compact session state to embed footers, and improved minimal-mode text layout
+  - added a guild-level `minimalmode` / `minimal` setting for compact text-first responses
+- Persistence and recovery:
+  - changed active-session snapshot flushing to persist playback progress while audio is running instead of only on command mutations
+  - improved restart recovery accuracy so resumed sessions return closer to the last heard position
+- Source and mirror support:
+  - added Tidal URL support for track, album, playlist, and mix metadata resolution with Deezer-first then YouTube mirroring
+  - added Tidal token bootstrap caching, ISRC-aware matching, and concurrent collection resolution for faster large imports
+  - added additional metadata mirror sources for Bandcamp, Audiomack, Mixcloud, and JioSaavn URLs
+- YouTube reliability:
+  - hardened `yt-dlp` startup and metadata resolution with multi-client strategy retries
+  - added runtime fallback from `yt-dlp` playback startup to the existing `play-dl` pipeline when needed
+  - shortened first-track startup waits for normal YouTube playback so audio starts sooner after lookup completes
+- Tooling and CI:
+  - fixed Node test discovery to use stable `node --test test` semantics in CI
+
 ## [0.5.0] - 2026-03-18
 
 - Session and persistence model:

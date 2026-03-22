@@ -25,7 +25,7 @@ Resilient, self-hosted music bot for Fluxer with persistent music data, queue sa
 
 | Area | Highlights |
 | --- | --- |
-| Playback | YouTube, SoundCloud, Deezer, Audius, radio streams, Spotify/Apple Music mirroring |
+| Playback | YouTube, SoundCloud, Deezer, Audius, radio streams, and mirrored imports from Spotify, Apple Music, Amazon Music, Tidal, Bandcamp, Audiomack, Mixcloud, and JioSaavn |
 | Reliability | reconnect, playback resume, heartbeat watchdogs, REST retries, graceful shutdown |
 | Persistence | playlists, favorites, history, templates, recap state, reputation/taste signals |
 | Operations | `/healthz`, `/readyz`, `/metrics`, structured logging, optional Sentry |
@@ -42,9 +42,10 @@ Resilient, self-hosted music bot for Fluxer with persistent music data, queue sa
 ## What It Does
 
 - Reliable gateway handling with reconnect, resume, heartbeat watchdogs, and REST retry logic.
-- Playback from YouTube, SoundCloud, Deezer, Audius, radio streams, and mirrored imports from Spotify and Apple Music URLs.
+- Playback from YouTube, SoundCloud, Deezer, Audius, radio streams, and mirrored imports from Spotify, Apple Music, Amazon Music, Tidal, Bandcamp, Audiomack, Mixcloud, and JioSaavn URLs.
 - Independent multi-voice playback sessions per guild, with separate queues per voice channel.
 - Voice-channel-scoped 24/7 mode plus one-shot restart recovery for active non-24/7 sessions.
+- Fast playlist UX with first-track start plus background queueing for large external playlists and mixes.
 - Persistent guild playlists, favorites, history, queue templates, recap data, and lightweight user taste/reputation signals in MongoDB.
 - Built-in `/healthz`, `/readyz`, and Prometheus `/metrics` endpoints.
 - Optional Sentry reporting and opt-in runtime playback diagnostics.
@@ -145,9 +146,11 @@ Good for the simplest Fluxer self-hosted deployment.
 
 - keep `ENABLE_YT_SEARCH=1`
 - keep `ENABLE_YT_PLAYBACK=1`
-- leave Spotify and Deezer credentials empty
+- leave Spotify, Deezer, and Tidal credentials empty
 - install `ffmpeg`
 - install `yt-dlp`
+
+This still supports YouTube, SoundCloud, Audius, radio streams, and keyless metadata mirroring from Bandcamp, Audiomack, Mixcloud, and JioSaavn URLs.
 
 </details>
 
@@ -181,7 +184,7 @@ With `DEEZER_ARL` configured, plain text `play` resolution prefers Deezer before
 
 | Problem | What to check |
 | --- | --- |
-| YouTube playback fails | `ffmpeg`, `yt-dlp`, `YTDLP_COOKIES_FILE`, `YTDLP_COOKIES_FROM_BROWSER` |
+| YouTube playback fails | `ffmpeg`, `yt-dlp`, `YTDLP_COOKIES_FILE`, `YTDLP_COOKIES_FROM_BROWSER`, `YTDLP_YOUTUBE_CLIENT` |
 | Commands fail but gateway connects | `API_BASE`, token validity, runtime REST access |
 | Voice joins but no audio | Fluxer voice-side setup, `VOICE_MAX_BITRATE`, LiveKit-based publisher flow, and whether a restart recovery snapshot existed before reboot |
 
@@ -193,6 +196,8 @@ With `DEEZER_ARL` configured, plain text `play` resolution prefers Deezer before
 - make sure `ffmpeg` works on the host
 - install `yt-dlp`
 - if YouTube returns bot checks, set `YTDLP_COOKIES_FILE` or `YTDLP_COOKIES_FROM_BROWSER`
+- if a specific YouTube extractor profile is unstable, try `YTDLP_YOUTUBE_CLIENT=ios,android,web`
+- the runtime now retries multiple `yt-dlp` client strategies and can fall back to `play-dl`, so outright startup failures usually point to host binaries or provider-side blocking
 
 ### Bot connects to gateway but commands fail
 
@@ -203,14 +208,14 @@ With `DEEZER_ARL` configured, plain text `play` resolution prefers Deezer before
 ### Bot joins voice but no audio is heard
 
 - check the voice-side setup on Fluxer first
-- the bot uses the LiveKit-based publisher in `src/voice/VoiceConnection.js`
+- the bot uses the LiveKit-based publisher in `src/voice/VoiceConnection.ts`
 - lower `VOICE_MAX_BITRATE` if your voice environment is bandwidth-constrained
 
 </details>
 
 ## Configuration
 
-`src/config.js` is the source of truth for parsing and validation.
+`src/config.ts` is the source of truth for parsing and validation.
 
 - Full env reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
 - Architecture notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
@@ -238,6 +243,7 @@ Default prefix: `!`
 
 - `prefix`
 - `settings`
+- `minimalmode [on|off]` / `minimal [on|off]`
 - `djrole`
 - `musiclog`
 - `voteskipcfg`
@@ -271,9 +277,9 @@ High-level runtime notes are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 | Area | Files |
 | --- | --- |
-| Bootstrap | `src/app/bootstrap.js`, `src/index.js` |
-| Gateway | `src/gateway.js` |
-| REST | `src/rest.js` |
+| Bootstrap | `src/app/bootstrap.ts`, `src/index.ts` |
+| Gateway | `src/gateway.ts` |
+| REST | `src/rest.ts` |
 | Commands and sessions | `src/bot/` |
 | Playback | `src/player/` |
 | Voice | `src/voice/` |

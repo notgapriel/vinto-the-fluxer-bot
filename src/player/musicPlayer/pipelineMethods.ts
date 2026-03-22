@@ -34,6 +34,35 @@ function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
 }
 
 export const pipelineMethods: LooseMethodMap = {
+  _getYtDlpClientStrategies() {
+    const configured = String(this.ytdlpYoutubeClient ?? '').trim();
+    if (!configured) return [false];
+
+    const tokens = configured
+      .split(',')
+      .map((token: string) => token.trim())
+      .filter(Boolean);
+
+    const strategies: Array<boolean | string> = [configured];
+    for (const token of tokens) {
+      if (!strategies.includes(token)) {
+        strategies.push(token);
+      }
+    }
+    strategies.push(false);
+    return strategies;
+  },
+
+  _resolveYtDlpClientArg(includeClientArg: boolean | string | null | undefined) {
+    if (typeof includeClientArg === 'string') {
+      return includeClientArg.trim() || null;
+    }
+    if (includeClientArg === true) {
+      return String(this.ytdlpYoutubeClient ?? '').trim() || null;
+    }
+    return null;
+  },
+
   _ffmpegHttpArgs(inputUrl: string, seekSec = 0, options: { isLive?: boolean } = {}) {
     const filterChain = this._buildTranscodeFilterChain();
     const seek = Math.max(0, Number.parseInt(String(seekSec), 10) || 0);
@@ -102,20 +131,29 @@ export const pipelineMethods: LooseMethodMap = {
       throw new ValidationError('YouTube playback is currently disabled by bot configuration.');
     }
 
-    await this._startYtDlpPipeline(url, seekSec);
+    try {
+      await this._startYtDlpPipeline(url, seekSec);
+      return;
+    } catch (err) {
+      this.logger?.warn?.('yt-dlp YouTube startup failed, falling back to play-dl pipeline', {
+        url,
+        seekSec,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    await this._startPlayDlPipeline(url, seekSec);
   },
 
   async _startYtDlpPipeline(url: string, seekSec = 0) {
-    const attempts = this.ytdlpYoutubeClient
-      ? [
-          { format: 'bestaudio/best', includeClientArg: true },
-          { format: 'bestaudio/best', includeClientArg: false },
-          { format: null, includeClientArg: false },
-        ]
-      : [
-          { format: 'bestaudio/best', includeClientArg: false },
-          { format: null, includeClientArg: false },
-        ];
+    const attempts = [];
+    const strategies = this._getYtDlpClientStrategies();
+    const formats = ['bestaudio/best', null];
+    for (const format of formats) {
+      for (const includeClientArg of strategies) {
+        attempts.push({ format, includeClientArg });
+      }
+    }
 
     let lastErr = null;
 
@@ -142,7 +180,12 @@ export const pipelineMethods: LooseMethodMap = {
     throw lastErr ?? new Error('yt-dlp format selection failed');
   },
 
-  async _startYtDlpSeekPipeline(url: string, seekSec = 0, formatSelector: string | null = 'bestaudio/best', includeClientArg = true) {
+  async _startYtDlpSeekPipeline(
+    url: string,
+    seekSec = 0,
+    formatSelector: string | null = 'bestaudio/best',
+    includeClientArg: boolean | string | null = true
+  ) {
     this._lastYtDlpDiagnostics = {
       formatSelector: formatSelector ?? null,
       includeClientArg: Boolean(includeClientArg),
@@ -165,7 +208,12 @@ export const pipelineMethods: LooseMethodMap = {
     this._bindPipelineErrorHandler(this.ffmpeg.stdout, 'ffmpeg.stdout');
   },
 
-  async _startYtDlpPipelineWithFormat(url: string, seekSec = 0, formatSelector: string | null = 'bestaudio/best', includeClientArg = true) {
+  async _startYtDlpPipelineWithFormat(
+    url: string,
+    seekSec = 0,
+    formatSelector: string | null = 'bestaudio/best',
+    includeClientArg: boolean | string | null = true
+  ) {
     this._lastYtDlpDiagnostics = {
       formatSelector: formatSelector ?? null,
       includeClientArg: Boolean(includeClientArg),
@@ -312,7 +360,11 @@ export const pipelineMethods: LooseMethodMap = {
     }
   },
 
-  async _spawnYtDlp(url: string, formatSelector: string | null = 'bestaudio/best', includeClientArg = true) {
+  async _spawnYtDlp(
+    url: string,
+    formatSelector: string | null = 'bestaudio/best',
+    includeClientArg: boolean | string | null = true
+  ) {
     const ytdlpVerboseEnabled = this._isYtDlpVerboseEnabled();
     const commonArgs = [
       '--ignore-config',
@@ -331,8 +383,9 @@ export const pipelineMethods: LooseMethodMap = {
       commonArgs.push('-f', formatSelector);
     }
 
-    if (includeClientArg && this.ytdlpYoutubeClient) {
-      commonArgs.push('--extractor-args', `youtube:player_client=${this.ytdlpYoutubeClient}`);
+    const clientArg = this._resolveYtDlpClientArg(includeClientArg);
+    if (clientArg) {
+      commonArgs.push('--extractor-args', `youtube:player_client=${clientArg}`);
     }
     if (this.ytdlpCookiesFile) {
       commonArgs.push('--cookies', this.ytdlpCookiesFile);
@@ -552,7 +605,11 @@ export const pipelineMethods: LooseMethodMap = {
     };
   },
 
-  async _resolveYtDlpStreamUrl(url: string, formatSelector: string | null = 'bestaudio/best', includeClientArg = true) {
+  async _resolveYtDlpStreamUrl(
+    url: string,
+    formatSelector: string | null = 'bestaudio/best',
+    includeClientArg: boolean | string | null = true
+  ) {
     const args = [
       '--ignore-config',
       '--quiet',
@@ -563,8 +620,9 @@ export const pipelineMethods: LooseMethodMap = {
     if (formatSelector) {
       args.push('-f', formatSelector);
     }
-    if (includeClientArg && this.ytdlpYoutubeClient) {
-      args.push('--extractor-args', `youtube:player_client=${this.ytdlpYoutubeClient}`);
+    const clientArg = this._resolveYtDlpClientArg(includeClientArg);
+    if (clientArg) {
+      args.push('--extractor-args', `youtube:player_client=${clientArg}`);
     }
     if (this.ytdlpCookiesFile) {
       args.push('--cookies', this.ytdlpCookiesFile);

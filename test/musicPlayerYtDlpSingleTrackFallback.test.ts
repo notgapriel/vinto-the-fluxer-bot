@@ -62,6 +62,44 @@ test('single YouTube track resolver falls back to play-dl when yt-dlp metadata f
   assert.equal(tracks[0]!.artist, 'Fallback Channel');
 });
 
+test('single YouTube track resolver retries yt-dlp metadata without configured client before play-dl', async () => {
+  const player = createPlayer();
+  player.ytdlpYoutubeClient = 'web';
+  const extractorArgs: Array<string | null> = [];
+  let playDlCalls = 0;
+
+  player._runYtDlpCommand = async (args: string[]) => {
+    const extractorIndex = args.findIndex((arg) => arg === '--extractor-args');
+    extractorArgs.push(extractorIndex >= 0 ? String(args[extractorIndex + 1] ?? '') : null);
+
+    if (extractorArgs.length === 1) {
+      throw new Error('configured client blocked');
+    }
+
+    return {
+      code: 0,
+      stdout: JSON.stringify({
+        webpage_url: 'https://www.youtube.com/watch?v=OBoMLZTtqb8',
+        title: 'Recovered without client arg',
+        duration: 201,
+        duration_string: '3:21',
+        channel: 'Fallback Channel',
+      }),
+      stderr: '',
+    };
+  };
+  player._fetchSingleYouTubeTrackViaPlayDl = async () => {
+    playDlCalls += 1;
+    throw new Error('should not reach play-dl');
+  };
+
+  const tracks = await player._resolveSingleYouTubeTrack('https://www.youtube.com/watch?v=OBoMLZTtqb8', 'user-1');
+  assert.equal(tracks.length, 1);
+  assert.equal(tracks[0]!.title, 'Recovered without client arg');
+  assert.deepEqual(extractorArgs, ['youtube:player_client=web', null]);
+  assert.equal(playDlCalls, 0);
+});
+
 test('single YouTube track resolver still returns unknown metadata if yt-dlp and play-dl both fail', async () => {
   const player = createPlayer();
 

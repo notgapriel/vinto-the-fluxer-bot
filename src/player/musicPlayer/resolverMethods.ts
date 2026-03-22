@@ -4,14 +4,19 @@ import { isPlayDlBrowseFailure } from './errorUtils.ts';
 import type { Track } from '../../types/domain.ts';
 import {
   inferYouTubeWatchUrlFromPlaylist,
+  isAudiomackUrl,
   isAmazonMusicUrl,
   isAppleMusicUrl,
   isAudiusUrl,
+  isBandcampUrl,
   isDeezerUrl,
   isHttpUrl,
+  isJioSaavnUrl,
   isLikelyPlaylistUrl,
+  isMixcloudUrl,
   isSoundCloudUrl,
   isSpotifyUrl,
+  isTidalUrl,
   isYouTubeUrl,
   normalizeYouTubeVideoUrlFromEntry,
   pickThumbnailUrlFromItem,
@@ -90,6 +95,11 @@ export const resolverMethods: LooseMethodMap = {
         if (isSoundCloudUrl(url)) return this.sources.soundcloud.resolveByGuess(url, requestedBy);
         if (isDeezerUrl(url)) return this.sources.deezer.resolveByGuess(url, requestedBy);
         if (isSpotifyUrl(url)) return this.sources.resolver.resolveSpotifyByGuess(url, requestedBy, safeLimit);
+        if (isTidalUrl(url)) return this.sources.resolver.resolveTidalByGuess(url, requestedBy, safeLimit);
+        if (isBandcampUrl(url)) return this._resolveBandcampByGuess(url, requestedBy, safeLimit);
+        if (isAudiomackUrl(url)) return this._resolveAudiomackByGuess(url, requestedBy, safeLimit);
+        if (isMixcloudUrl(url)) return this._resolveMixcloudByGuess(url, requestedBy, safeLimit);
+        if (isJioSaavnUrl(url)) return this._resolveJioSaavnByGuess(url, requestedBy, safeLimit);
         if (isAmazonMusicUrl(url)) return this.sources.resolver.resolveAmazonByGuess(url, requestedBy, safeLimit);
         if (isAppleMusicUrl(url)) return this.sources.resolver.resolveAppleByGuess(url, requestedBy, safeLimit);
         return this.sources.resolver.resolveSingleUrlTrack(url, requestedBy);
@@ -245,6 +255,7 @@ export const resolverMethods: LooseMethodMap = {
       deezerFullStreamUrl: data?.deezerFullStreamUrl ?? data?.deezer_full_stream_url ?? null,
       spotifyTrackId: data?.spotifyTrackId ?? data?.spotify_track_id ?? null,
       spotifyPreviewUrl: data?.spotifyPreviewUrl ?? data?.spotify_preview_url ?? null,
+      isrc: data?.isrc ?? null,
       isPreview: data?.isPreview ?? data?.is_preview ?? false,
       isLive: data?.isLive ?? data?.is_live ?? false,
       seekStartSec: data?.seekStartSec ?? data?.seek_start_sec ?? 0,
@@ -298,53 +309,65 @@ export const resolverMethods: LooseMethodMap = {
   },
 
   async _resolveSingleYouTubeTrackViaYtDlp(url: string, requestedBy: string | null) {
-    const args = [
-      '--ignore-config',
-      '--quiet',
-      '--no-warnings',
-      '--skip-download',
-      '--dump-single-json',
-    ];
+    const strategies = this._getYtDlpClientStrategies?.() ?? [false];
+    let lastErr = null;
 
-    if (this.ytdlpYoutubeClient) {
-      args.push('--extractor-args', `youtube:player_client=${this.ytdlpYoutubeClient}`);
-    }
-    if (this.ytdlpCookiesFile) {
-      args.push('--cookies', this.ytdlpCookiesFile);
-    }
-    if (this.ytdlpCookiesFromBrowser) {
-      args.push('--cookies-from-browser', this.ytdlpCookiesFromBrowser);
-    }
-    if (this.ytdlpExtraArgs.length) {
-      args.push(...this.ytdlpExtraArgs);
+    for (const strategy of strategies) {
+      const args = [
+        '--ignore-config',
+        '--quiet',
+        '--no-warnings',
+        '--skip-download',
+        '--dump-single-json',
+      ];
+
+      const clientArg = this._resolveYtDlpClientArg?.(strategy) ?? null;
+      if (clientArg) {
+        args.push('--extractor-args', `youtube:player_client=${clientArg}`);
+      }
+      if (this.ytdlpCookiesFile) {
+        args.push('--cookies', this.ytdlpCookiesFile);
+      }
+      if (this.ytdlpCookiesFromBrowser) {
+        args.push('--cookies-from-browser', this.ytdlpCookiesFromBrowser);
+      }
+      if (this.ytdlpExtraArgs.length) {
+        args.push(...this.ytdlpExtraArgs);
+      }
+
+      args.push(url);
+
+      try {
+        const { stdout } = await this._runYtDlpCommand(args, 15_000);
+        if (!stdout?.trim()) {
+          throw new Error('yt-dlp returned empty metadata payload.');
+        }
+
+        let payload;
+        try {
+          payload = JSON.parse(stdout);
+        } catch {
+          throw new Error('yt-dlp returned invalid JSON metadata.');
+        }
+
+        const resolvedUrl = String(payload?.webpage_url ?? '').trim() || toCanonicalYouTubeWatchUrl(url) || url;
+        const title = String(payload?.title ?? '').trim() || resolvedUrl;
+
+        return this._buildTrack({
+          title,
+          url: resolvedUrl,
+          duration: payload?.duration_string ?? payload?.duration ?? 'Unknown',
+          thumbnailUrl: pickThumbnailUrlFromItem(payload),
+          requestedBy,
+          source: 'youtube',
+          artist: pickTrackArtistFromMetadata(payload) || String(payload?.channel ?? payload?.uploader ?? '').trim() || null,
+        });
+      } catch (err) {
+        lastErr = err;
+      }
     }
 
-    args.push(url);
-
-    const { stdout } = await this._runYtDlpCommand(args, 15_000);
-    if (!stdout?.trim()) {
-      throw new Error('yt-dlp returned empty metadata payload.');
-    }
-
-    let payload;
-    try {
-      payload = JSON.parse(stdout);
-    } catch {
-      throw new Error('yt-dlp returned invalid JSON metadata.');
-    }
-
-    const resolvedUrl = String(payload?.webpage_url ?? '').trim() || toCanonicalYouTubeWatchUrl(url) || url;
-    const title = String(payload?.title ?? '').trim() || resolvedUrl;
-
-    return this._buildTrack({
-      title,
-      url: resolvedUrl,
-      duration: payload?.duration_string ?? payload?.duration ?? 'Unknown',
-      thumbnailUrl: pickThumbnailUrlFromItem(payload),
-      requestedBy,
-      source: 'youtube',
-      artist: pickTrackArtistFromMetadata(payload) || String(payload?.channel ?? payload?.uploader ?? '').trim() || null,
-    });
+    throw lastErr ?? new Error('yt-dlp metadata lookup failed');
   },
 
   async _resolveYouTubePlaylistTracks(
@@ -474,62 +497,71 @@ export const resolverMethods: LooseMethodMap = {
 
   async _resolveYouTubePlaylistTracksViaYtDlp(url: string, requestedBy: string | null, limit?: number | null) {
     const safeLimit = normalizeResolveLimit(limit, this.maxPlaylistTracks);
-    const args = [
-      '--ignore-config',
-      '--quiet',
-      '--no-warnings',
-      '--skip-download',
-      '--flat-playlist',
-      '--dump-single-json',
-      '--playlist-end', String(safeLimit),
-    ];
+    const strategies = this._getYtDlpClientStrategies?.() ?? [false];
 
-    if (this.ytdlpYoutubeClient) {
-      args.push('--extractor-args', `youtube:player_client=${this.ytdlpYoutubeClient}`);
+    for (const strategy of strategies) {
+      const args = [
+        '--ignore-config',
+        '--quiet',
+        '--no-warnings',
+        '--skip-download',
+        '--flat-playlist',
+        '--dump-single-json',
+        '--playlist-end', String(safeLimit),
+      ];
+
+      const clientArg = this._resolveYtDlpClientArg?.(strategy) ?? null;
+      if (clientArg) {
+        args.push('--extractor-args', `youtube:player_client=${clientArg}`);
+      }
+      if (this.ytdlpCookiesFile) {
+        args.push('--cookies', this.ytdlpCookiesFile);
+      }
+      if (this.ytdlpCookiesFromBrowser) {
+        args.push('--cookies-from-browser', this.ytdlpCookiesFromBrowser);
+      }
+      if (this.ytdlpExtraArgs.length) {
+        args.push(...this.ytdlpExtraArgs);
+      }
+
+      args.push(url);
+
+      const { stdout } = await this._runYtDlpCommand(args, 25_000).catch(() => ({ stdout: '' }));
+      if (!stdout?.trim()) continue;
+
+      let payload;
+      try {
+        payload = JSON.parse(stdout);
+      } catch {
+        continue;
+      }
+
+      const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+      const tracks = [];
+
+      for (const entry of entries) {
+        if (tracks.length >= safeLimit) break;
+        const videoUrl = normalizeYouTubeVideoUrlFromEntry(entry);
+        if (!videoUrl) continue;
+
+        const title = String(entry?.title ?? '').trim() || videoUrl;
+        const duration = Number.isFinite(entry?.duration) ? entry.duration : 'Unknown';
+        tracks.push(this._buildTrack({
+          title,
+          url: videoUrl,
+          duration,
+          thumbnailUrl: pickThumbnailUrlFromItem(entry),
+          requestedBy,
+          source: 'youtube-playlist-ytdlp',
+          artist: pickTrackArtistFromMetadata(entry),
+        }));
+      }
+
+      if (tracks.length) {
+        return tracks;
+      }
     }
-    if (this.ytdlpCookiesFile) {
-      args.push('--cookies', this.ytdlpCookiesFile);
-    }
-    if (this.ytdlpCookiesFromBrowser) {
-      args.push('--cookies-from-browser', this.ytdlpCookiesFromBrowser);
-    }
-    if (this.ytdlpExtraArgs.length) {
-      args.push(...this.ytdlpExtraArgs);
-    }
 
-    args.push(url);
-
-    const { stdout } = await this._runYtDlpCommand(args, 25_000);
-    if (!stdout?.trim()) return [];
-
-    let payload;
-    try {
-      payload = JSON.parse(stdout);
-    } catch {
-      return [];
-    }
-
-    const entries = Array.isArray(payload?.entries) ? payload.entries : [];
-    const tracks = [];
-
-    for (const entry of entries) {
-      if (tracks.length >= safeLimit) break;
-      const videoUrl = normalizeYouTubeVideoUrlFromEntry(entry);
-      if (!videoUrl) continue;
-
-      const title = String(entry?.title ?? '').trim() || videoUrl;
-      const duration = Number.isFinite(entry?.duration) ? entry.duration : 'Unknown';
-      tracks.push(this._buildTrack({
-        title,
-        url: videoUrl,
-        duration,
-        thumbnailUrl: pickThumbnailUrlFromItem(entry),
-        requestedBy,
-        source: 'youtube-playlist-ytdlp',
-        artist: pickTrackArtistFromMetadata(entry),
-      }));
-    }
-
-    return tracks;
+    return [];
   },
 };

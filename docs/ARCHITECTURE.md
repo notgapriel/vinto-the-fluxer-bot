@@ -4,10 +4,10 @@
 
 The bot is split into a few clear runtime layers:
 
-- `src/index.js`: process entrypoint and top-level startup error handling
-- `src/app/bootstrap.js`: config loading, dependency wiring, monitoring, presence rotation, graceful shutdown
-- `src/gateway.js`: websocket lifecycle, heartbeat handling, reconnect, resume, presence updates, voice state dispatch
-- `src/rest.js`: authenticated REST client with retry, timeout, and rate-limit handling
+- `src/index.ts`: process entrypoint and top-level startup error handling
+- `src/app/bootstrap.ts`: config loading, dependency wiring, monitoring, presence rotation, graceful shutdown
+- `src/gateway.ts`: websocket lifecycle, heartbeat handling, reconnect, resume, presence updates, voice state dispatch
+- `src/rest.ts`: authenticated REST client with retry, timeout, and rate-limit handling
 - `src/bot/`: command router, command registry, guild sessions, permission checks, state stores, and domain services
 - `src/player/`: queue model, resolver pipeline, ffmpeg/yt-dlp processing, playback control, and provider-specific source logic
 - `src/voice/`: LiveKit-based PCM publishing
@@ -22,7 +22,7 @@ Operationally that means:
 
 - runtime API calls go through the Fluxer REST API
 - websocket events come from the Fluxer Gateway
-- voice publishing uses the LiveKit-based flow implemented in `src/voice/VoiceConnection.js`
+- voice publishing uses the LiveKit-based flow implemented in `src/voice/VoiceConnection.ts`
 
 ## Startup Flow
 
@@ -58,7 +58,13 @@ Resolution is intentionally layered:
    - SoundCloud track or playlist
    - Spotify track, album, playlist, artist
    - Apple Music song, album, artist
+   - Amazon Music song or album
    - Deezer track, album, playlist
+   - Tidal track, album, playlist, mix
+   - Bandcamp track or album
+   - Audiomack song URLs
+   - Mixcloud cloudcast and playlist-style URLs
+   - JioSaavn song and collection-style URLs
    - Audius links
    - direct radio stream URLs and lightweight playlist formats such as `m3u` and `pls`
 3. Generic URL fallback:
@@ -67,10 +73,10 @@ Resolution is intentionally layered:
 
 Playback path notes:
 
-- YouTube uses ffmpeg plus yt-dlp/play-dl resolution paths depending on the input and resolver mode.
+- YouTube uses ffmpeg plus hardened `yt-dlp` resolution with multiple client strategies, then `play-dl` fallback when needed.
 - SoundCloud and Audius use direct API-backed playback paths.
 - Deezer can use direct media URL resolution when `DEEZER_ARL` is available.
-- Spotify and Apple Music are metadata resolvers only. They are mirrored to Deezer first when possible, otherwise YouTube.
+- Spotify, Apple Music, Amazon Music, Tidal, Bandcamp, Audiomack, Mixcloud, and JioSaavn act as metadata resolvers only. They are mirrored to Deezer first when possible, otherwise YouTube.
 - Radio streams are treated as live sources and are not seekable.
 
 ## Session and Voice Lifecycle
@@ -92,6 +98,7 @@ Important behavior:
 - queue-end behavior can still disconnect after idle timeout even if listeners remain, unless that voice-channel session has 24/7 enabled
 - 24/7 is voice-channel-scoped and comes from `guild_features.voiceProfiles[channelId].stayInVoiceEnabled`
 - active non-24/7 sessions still persist restart-recovery state so playback can be restored after a bot restart
+- active sessions flush progress snapshots periodically while audio is running, so restart recovery resumes closer to the current position instead of the last command boundary
 
 ## Data Model
 

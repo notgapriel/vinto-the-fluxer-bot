@@ -1,6 +1,6 @@
 # Configuration Reference
 
-All environment variables are parsed in `src/config.js`. `.env.example` is the template to copy from.
+All environment variables are parsed in `src/config.ts`. `.env.example` is the template to copy from.
 
 ## Required
 
@@ -16,6 +16,8 @@ All environment variables are parsed in `src/config.js`. `.env.example` is the t
 - `GATEWAY_ONLY_MODE=1` skips the startup REST probe and gateway auto-discovery, but normal bot operation still depends on the Fluxer REST API.
 - Spotify credentials are optional as a group. If you set one of `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, or `SPOTIFY_REFRESH_TOKEN`, you must set all three.
 - `DEEZER_ARL` is optional, but it enables Deezer-first text resolution and the best direct Deezer playback path.
+- `TIDAL_TOKEN` is optional. If it is unset, the bot will best-effort bootstrap a public client token from Tidal's web app for metadata lookups.
+- Bandcamp, Audiomack, Mixcloud, and JioSaavn URL imports do not need separate API keys in the current codebase. They resolve metadata and then mirror to Deezer or YouTube.
 
 ## Core Runtime
 
@@ -103,6 +105,7 @@ All environment variables are parsed in `src/config.js`. `.env.example` is the t
 | `ENABLE_YT_PLAYBACK` | `1` | Enable YouTube playback paths. |
 | `ENABLE_SPOTIFY_IMPORT` | `1` | Enable Spotify URL metadata resolution and mirroring. |
 | `ENABLE_DEEZER_IMPORT` | `1` | Enable Deezer URL ingestion. |
+| `ENABLE_TIDAL_IMPORT` | `1` | Enable Tidal URL metadata resolution and Deezer-first/YouTube fallback mirroring. |
 
 ## Provider Credentials
 
@@ -112,6 +115,8 @@ All environment variables are parsed in `src/config.js`. `.env.example` is the t
 | `SPOTIFY_CLIENT_SECRET` | empty | Optional. Must be set together with client id and refresh token. |
 | `SPOTIFY_REFRESH_TOKEN` | empty | Optional. Must be set together with client id and secret. |
 | `SPOTIFY_MARKET` | `US` | Two-letter market code. |
+| `TIDAL_TOKEN` | empty | Optional Tidal client token. If empty, the bot tries to bootstrap one from Tidal web assets. |
+| `TIDAL_COUNTRY_CODE` | `US` | Two-letter Tidal market code used for metadata requests. |
 | `SOUNDCLOUD_CLIENT_ID` | empty | Optional fixed SoundCloud client id. |
 | `SOUNDCLOUD_AUTO_CLIENT_ID` | `1` | Auto-resolve a SoundCloud client id via `play-dl` on startup. |
 | `DEEZER_ARL` | empty | Optional Deezer ARL cookie for direct Deezer playback and search preference. |
@@ -135,9 +140,9 @@ These are used only by `npm run spotify:token`.
 | `YTDLP_BIN` | auto | Override yt-dlp binary path. |
 | `YTDLP_COOKIES_FILE` | empty | Cookies file for YouTube bot-check mitigation. |
 | `YTDLP_COOKIES_FROM_BROWSER` | empty | Import cookies from a local browser profile. |
-| `YTDLP_YOUTUBE_CLIENT` | empty | Optional YouTube extractor profile(s). |
+| `YTDLP_YOUTUBE_CLIENT` | empty | Optional YouTube extractor profile(s). Comma-separated values are tried as a strategy list before fallback. |
 | `YTDLP_EXTRA_ARGS` | empty | Comma-separated extra yt-dlp args. |
-| `YOUTUBE_PLAYLIST_RESOLVER` | `ytdlp` | Playlist resolver order. Single-track YouTube metadata and text search also prefer `yt-dlp`, with `play-dl` only as fallback. |
+| `YOUTUBE_PLAYLIST_RESOLVER` | `ytdlp` | Playlist resolver order. Single-track YouTube metadata and startup also prefer hardened `yt-dlp`, with `play-dl` fallback when needed. |
 
 ## Command Rate Limits
 
@@ -168,7 +173,9 @@ Use this if you want the easiest normal Fluxer self-hosted setup.
 
 - required: `BOT_TOKEN`, `MONGODB_URI`
 - recommended: install `ffmpeg` and `yt-dlp`
-- leave Spotify, SoundCloud, and Deezer credentials empty
+- leave Spotify, SoundCloud, Deezer, and Tidal credentials empty
+
+This still allows direct YouTube/SoundCloud/Audius/radio playback and URL imports from Bandcamp, Audiomack, Mixcloud, and JioSaavn through metadata mirroring.
 
 ## Runtime Notes
 
@@ -186,6 +193,26 @@ Use this if Spotify links should work.
 - set `SPOTIFY_REFRESH_TOKEN`
 
 Spotify URLs resolve metadata only. Playback is mirrored to Deezer or YouTube.
+
+### Tidal URL support
+
+Use this if Tidal links should work.
+
+- leave `TIDAL_TOKEN` empty for best-effort automatic bootstrap, or set it explicitly
+- optionally set `TIDAL_COUNTRY_CODE`
+
+Tidal URLs resolve metadata only. Playback is mirrored to Deezer first, then YouTube.
+
+### Additional mirror-only URL sources
+
+The current codebase also accepts these keyless metadata sources:
+
+- Bandcamp track and album URLs
+- Audiomack song URLs
+- Mixcloud cloudcast and playlist-style URLs
+- JioSaavn song and collection-style URLs
+
+These sources do not stream directly. They resolve metadata and then mirror to Deezer first, with YouTube as fallback.
 
 ### Deezer-first resolution
 

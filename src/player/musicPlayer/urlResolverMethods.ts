@@ -3,6 +3,7 @@ import { ValidationError } from '../../core/errors.ts';
 import type { MusicPlayer } from '../MusicPlayer.ts';
 import type { Track } from '../../types/domain.ts';
 import {
+  isTidalUrl,
   isHttpUrl,
   isLikelyDirectAudioFileUrl,
   isLikelyPlaylistUrl,
@@ -21,6 +22,7 @@ type CrossSourceTrack = Record<string, unknown> & {
   uploader?: unknown;
   author?: unknown;
   durationInSec?: unknown;
+  isrc?: unknown;
 };
 type UrlResolverMethods = {
   _resolveSpotifyTrack(url: string, requestedBy: string | null): Promise<Track[]>;
@@ -32,10 +34,14 @@ type UrlResolverMethods = {
   _resolveSoundCloudByGuess(url: string, requestedBy: string | null): Promise<Track[]>;
   _resolveDeezerByGuess(url: string, requestedBy: string | null): Promise<Track[]>;
   _resolveSpotifyByGuess(url: string, requestedBy: string | null): Promise<Track[]>;
+  _resolveTidalByGuess(url: string, requestedBy: string | null, limit?: number | null): Promise<Track[]>;
   _resolveFromUrlFallbackSearch(url: string, requestedBy: string | null, source: string): Promise<Track[]>;
   _normalizeInputUrl(url: unknown): Promise<string>;
 };
-type UrlResolverRuntime = MusicPlayer & UrlResolverMethods;
+type UrlResolverRuntime = MusicPlayer & UrlResolverMethods & {
+  _searchYouTubeTracks(query: string, limit: number, requestedBy: string | null): Promise<Track[]>;
+  _cloneTrack(track: Track, overrides?: Partial<Track>): Track;
+};
 type NormalizedInputUrlCacheEntry = { url: string; expiresAtMs: number };
 
 const SHORT_URL_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -193,6 +199,11 @@ function resolveSourceArtist(sourceTrack: CrossSourceTrack | null | undefined) {
   return null;
 }
 
+function normalizeIsrc(value: unknown) {
+  const normalized = String(value ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return normalized.length === 12 ? normalized : null;
+}
+
 export const urlResolverMethods: UrlResolverMethods & ThisType<UrlResolverRuntime> = {
   async _resolveSpotifyTrack(_url: string, _requestedBy: string | null) {
     if (!this.enableSpotifyImport) {
@@ -221,9 +232,30 @@ export const urlResolverMethods: UrlResolverMethods & ThisType<UrlResolverRuntim
       const title = String(sourceTrack?.title ?? sourceTrack?.name ?? 'Unknown title').trim() || 'Unknown title';
       const artist = resolveSourceArtist(sourceTrack);
       const query = artist ? `${artist} - ${title}` : title;
-      const result = await playdl.search(query, { source: { youtube: 'video' }, limit: 1 }).catch(() => []);
-      if (!result.length) continue;
-      const firstResult = result[0]!;
+      const isrc = normalizeIsrc(sourceTrack?.isrc);
+      let matchedTrack = null;
+
+      if (isrc) {
+        const isrcResults = await this._searchYouTubeTracks(`"${isrc}"`, 1, requestedBy).catch(() => []);
+        matchedTrack = isrcResults[0] ?? null;
+      }
+
+      if (!matchedTrack) {
+        const queryResults = await this._searchYouTubeTracks(query, 1, requestedBy).catch(() => []);
+        matchedTrack = queryResults[0] ?? null;
+      }
+
+      if (matchedTrack) {
+        resolved.push(this._cloneTrack(matchedTrack, {
+          requestedBy,
+          source,
+        }));
+        continue;
+      }
+
+      const fallbackResults = await playdl.search(query, { source: { youtube: 'video' }, limit: 1 }).catch(() => []);
+      if (!fallbackResults.length) continue;
+      const firstResult = fallbackResults[0]!;
 
       resolved.push(this._buildTrack({
         title: firstResult.title || title,
@@ -478,6 +510,7 @@ export const urlResolverMethods: UrlResolverMethods & ThisType<UrlResolverRuntim
         || parsed.hostname.includes('on.soundcloud.com')
         || parsed.hostname === 'spoti.fi'
         || parsed.hostname.includes('spotify.link')
+        || parsed.hostname.includes('tidal.link')
       );
       if (shouldExpand) {
         const cached = this.normalizedInputUrlCache.get(trimmed) as NormalizedInputUrlCacheEntry | undefined;
@@ -509,6 +542,10 @@ export const urlResolverMethods: UrlResolverMethods & ThisType<UrlResolverRuntim
     }
 
     return trimmed;
+  },
+
+  async _resolveTidalByGuess(_url: string, _requestedBy: string | null, _limit?: number | null) {
+    throw new ValidationError('Tidal resolver is not attached.');
   },
 };
 

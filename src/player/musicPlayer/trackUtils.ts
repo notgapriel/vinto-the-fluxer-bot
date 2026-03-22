@@ -206,6 +206,54 @@ export function isAmazonMusicUrl(value: unknown) {
   }
 }
 
+export function isTidalUrl(value: unknown) {
+  try {
+    const parsed = new URL(String(value ?? ''));
+    const host = parsed.hostname.toLowerCase();
+    return host === 'tidal.com' || host.endsWith('.tidal.com');
+  } catch {
+    return false;
+  }
+}
+
+export function isBandcampUrl(value: unknown) {
+  try {
+    const parsed = new URL(String(value ?? ''));
+    return parsed.hostname.toLowerCase().endsWith('.bandcamp.com');
+  } catch {
+    return false;
+  }
+}
+
+export function isAudiomackUrl(value: unknown) {
+  try {
+    const parsed = new URL(String(value ?? ''));
+    return parsed.hostname.toLowerCase() === 'audiomack.com' || parsed.hostname.toLowerCase() === 'www.audiomack.com';
+  } catch {
+    return false;
+  }
+}
+
+export function isMixcloudUrl(value: unknown) {
+  try {
+    const parsed = new URL(String(value ?? ''));
+    const host = parsed.hostname.toLowerCase();
+    return host === 'mixcloud.com' || host.endsWith('.mixcloud.com');
+  } catch {
+    return false;
+  }
+}
+
+export function isJioSaavnUrl(value: unknown) {
+  try {
+    const parsed = new URL(String(value ?? ''));
+    const host = parsed.hostname.toLowerCase();
+    return host === 'jiosaavn.com' || host === 'www.jiosaavn.com';
+  } catch {
+    return false;
+  }
+}
+
 export function extractAppleMusicEntity(value: unknown) {
   try {
     const parsed = new URL(String(value ?? ''));
@@ -298,6 +346,129 @@ export function extractAmazonMusicEntity(value: unknown) {
       type,
       id,
       trackId: trackId || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function extractTidalEntity(value: unknown) {
+  try {
+    const parsed = new URL(String(value ?? ''));
+    const host = parsed.hostname.toLowerCase();
+    if (host !== 'tidal.com' && !host.endsWith('.tidal.com')) return null;
+
+    const segments = String(parsed.pathname ?? '')
+      .split('/')
+      .map((segment) => decodeURIComponent(segment).trim())
+      .filter(Boolean);
+    if (!segments.length) return null;
+
+    const normalizedSegments = String(segments[0] ?? '').toLowerCase() === 'browse'
+      ? segments.slice(1)
+      : segments;
+    const type = String(normalizedSegments[0] ?? '').toLowerCase();
+    const id = String(normalizedSegments[1] ?? '').trim();
+    if (!['track', 'album', 'playlist', 'mix'].includes(type) || !id) return null;
+    return { type, id };
+  } catch {
+    return null;
+  }
+}
+
+export function extractBandcampEntity(value: unknown) {
+  try {
+    const parsed = new URL(String(value ?? ''));
+    const host = parsed.hostname.toLowerCase();
+    const match = host.match(/^([^.]+)\.bandcamp\.com$/i);
+    const subdomain = match?.[1] ?? null;
+    if (!subdomain) return null;
+
+    const segments = String(parsed.pathname ?? '')
+      .split('/')
+      .map((segment) => decodeURIComponent(segment).trim())
+      .filter(Boolean);
+    const type = String(segments[0] ?? '').toLowerCase();
+    const slug = String(segments[1] ?? '').trim();
+    if (!['track', 'album'].includes(type) || !slug) return null;
+    return { type, slug, subdomain };
+  } catch {
+    return null;
+  }
+}
+
+export function extractAudiomackEntity(value: unknown) {
+  try {
+    const parsed = new URL(String(value ?? ''));
+    const host = parsed.hostname.toLowerCase();
+    if (host !== 'audiomack.com' && host !== 'www.audiomack.com') return null;
+
+    const segments = String(parsed.pathname ?? '')
+      .split('/')
+      .map((segment) => decodeURIComponent(segment).trim())
+      .filter(Boolean);
+    if (segments.length < 2) return null;
+
+    const user = String(segments[0] ?? '').trim();
+    const type = String(segments[1] ?? '').toLowerCase();
+    const slug = segments.length > 2 ? segments.slice(2).join('/') : null;
+    if (!user || !type) return null;
+    if (!['song', 'album', 'playlist'].includes(type)) {
+      return { user, type: 'profile', slug: slug || null };
+    }
+    return { user, type, slug: slug || null };
+  } catch {
+    return null;
+  }
+}
+
+export function extractMixcloudEntity(value: unknown) {
+  try {
+    const parsed = new URL(String(value ?? ''));
+    const host = parsed.hostname.toLowerCase();
+    if (!(host === 'mixcloud.com' || host.endsWith('.mixcloud.com'))) return null;
+
+    const segments = String(parsed.pathname ?? '')
+      .split('/')
+      .map((segment) => decodeURIComponent(segment).trim())
+      .filter(Boolean);
+    if (!segments.length) return null;
+
+    const user = String(segments[0] ?? '').trim();
+    if (!user) return null;
+    if (segments[1]?.toLowerCase() === 'playlists' && segments[2]) {
+      return { type: 'playlist', user, slug: String(segments[2]).trim() };
+    }
+    if (['uploads', 'favorites', 'listens', 'stream'].includes(String(segments[1] ?? '').toLowerCase())) {
+      return { type: String(segments[1]).toLowerCase(), user, slug: null };
+    }
+    if (segments[1]) {
+      return { type: 'track', user, slug: String(segments[1]).trim() };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function extractJioSaavnEntity(value: unknown) {
+  try {
+    const parsed = new URL(String(value ?? ''));
+    const host = parsed.hostname.toLowerCase();
+    if (host !== 'jiosaavn.com' && host !== 'www.jiosaavn.com') return null;
+
+    const segments = String(parsed.pathname ?? '')
+      .split('/')
+      .map((segment) => decodeURIComponent(segment).trim())
+      .filter(Boolean);
+    if (segments.length < 2) return null;
+
+    const type = String(segments[0] ?? '').toLowerCase();
+    const id = String(segments[segments.length - 1] ?? '').trim();
+    if (!['album', 'featured', 'song', 's', 'artist'].includes(type) || !id) return null;
+    return {
+      type: type === 's' && String(segments[1] ?? '').toLowerCase() === 'playlist' ? 'playlist' : type,
+      id,
     };
   } catch {
     return null;

@@ -15,6 +15,7 @@ type TrackFactoryInput = {
   deezerFullStreamUrl?: string | null;
   spotifyTrackId?: string | null;
   spotifyPreviewUrl?: string | null;
+  isrc?: string | null;
   isPreview?: boolean;
   isLive?: boolean;
   seekStartSec?: number;
@@ -36,6 +37,7 @@ export const trackFactoryMethods = {
     deezerFullStreamUrl = null,
     spotifyTrackId = null,
     spotifyPreviewUrl = null,
+    isrc = null,
     isPreview = false,
     isLive = false,
     seekStartSec = 0,
@@ -60,6 +62,7 @@ export const trackFactoryMethods = {
       deezerFullStreamUrl: normalizedDeezerFull,
       spotifyTrackId: spotifyTrackId ? String(spotifyTrackId) : null,
       spotifyPreviewUrl: normalizedSpotifyPreview,
+      isrc: isrc ? String(isrc).trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || null : null,
       isPreview: Boolean(isPreview),
       isLive: Boolean(isLive),
       queuedAt: Date.now(),

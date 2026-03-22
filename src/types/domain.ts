@@ -26,6 +26,7 @@ export interface Track {
   deezerFullStreamUrl?: string | null;
   spotifyTrackId?: string | null;
   spotifyPreviewUrl?: string | null;
+  isrc?: string | null;
   isPreview?: boolean;
   isLive?: boolean;
   queuedAt?: number;

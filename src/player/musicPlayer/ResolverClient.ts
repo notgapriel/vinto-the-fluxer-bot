@@ -45,6 +45,11 @@ export class ResolverClient {
     return api._resolveSpotifyByGuess(url, requestedBy, limit);
   }
 
+  resolveTidalByGuess(url: string, requestedBy?: string | null, limit?: number | null) {
+    const api = this.host as { _resolveTidalByGuess: (url: string, requestedBy?: string | null, limit?: number | null) => unknown };
+    return api._resolveTidalByGuess(url, requestedBy, limit);
+  }
+
   resolveAppleByGuess(url: string, requestedBy?: string | null, limit?: number | null) {
     const api = this.host as { _resolveAppleByGuess: (url: string, requestedBy?: string | null, limit?: number | null) => unknown };
     return api._resolveAppleByGuess(url, requestedBy, limit);

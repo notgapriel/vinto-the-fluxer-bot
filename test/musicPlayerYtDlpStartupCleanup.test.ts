@@ -84,8 +84,13 @@ test('yt-dlp seek startup uses pipe-based startup path', async () => {
 
 test('yt-dlp seek startup retries pipe-based startup strategies directly', async () => {
   const player = createPlayer();
-  const attemptedClients: boolean[] = [];
-  player._startYtDlpPipelineWithFormat = async (_url: string, _seekSec: number, _format: string | null, includeClientArg: boolean) => {
+  const attemptedClients: Array<boolean | string | null> = [];
+  player._startYtDlpPipelineWithFormat = async (
+    _url: string,
+    _seekSec: number,
+    _format: string | null,
+    includeClientArg: boolean | string | null
+  ) => {
     attemptedClients.push(includeClientArg);
     if (attemptedClients.length < 3) {
       throw new Error('pipe startup failed');
@@ -94,7 +99,24 @@ test('yt-dlp seek startup retries pipe-based startup strategies directly', async
 
   await player._startYtDlpPipeline('https://www.youtube.com/watch?v=demo1234567', 120);
 
-  assert.deepEqual(attemptedClients, [true, false, false]);
+  assert.deepEqual(attemptedClients, ['web', false, 'web']);
+});
+
+test('youtube startup falls back to play-dl when yt-dlp startup exhausts all strategies', async () => {
+  const player = createPlayer();
+  let playDlCalls = 0;
+
+  player._startYtDlpPipeline = async () => {
+    throw new Error('yt-dlp blocked');
+  };
+  player._startPlayDlPipeline = async (_url: string, seekSec = 0) => {
+    playDlCalls += 1;
+    assert.equal(seekSec, 0);
+  };
+
+  await player._startYouTubePipeline('https://www.youtube.com/watch?v=demo1234567', 0);
+
+  assert.equal(playDlCalls, 1);
 });
 
 

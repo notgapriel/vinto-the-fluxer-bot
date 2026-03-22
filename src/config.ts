@@ -169,6 +169,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     spotifyClientSecret: env.SPOTIFY_CLIENT_SECRET?.trim() || null,
     spotifyRefreshToken: env.SPOTIFY_REFRESH_TOKEN?.trim() || null,
     spotifyMarket: (env.SPOTIFY_MARKET?.trim() || 'US').toUpperCase(),
+    tidalToken: env.TIDAL_TOKEN?.trim() || null,
+    tidalCountryCode: (env.TIDAL_COUNTRY_CODE?.trim() || 'US').toUpperCase(),
     soundcloudClientId: env.SOUNDCLOUD_CLIENT_ID?.trim() || null,
     soundcloudAutoClientId: parseBool(env.SOUNDCLOUD_AUTO_CLIENT_ID, true),
     deezerArl: env.DEEZER_ARL?.trim() || null,
@@ -191,6 +193,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     enableYtPlayback: parseBool(env.ENABLE_YT_PLAYBACK, true),
     enableSpotifyImport: parseBool(env.ENABLE_SPOTIFY_IMPORT, true),
     enableDeezerImport: parseBool(env.ENABLE_DEEZER_IMPORT, true),
+    enableTidalImport: parseBool(env.ENABLE_TIDAL_IMPORT, true),
     playCommandCooldownMs: parseNonNegativeInt(env.PLAY_COMMAND_COOLDOWN_MS, 2_000),
     searchResultLimit: parsePositiveInt(env.SEARCH_RESULT_LIMIT, 5),
     searchPickTimeoutMs: parsePositiveInt(env.SEARCH_PICK_TIMEOUT_MS, 45_000),
@@ -247,6 +250,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
 
   if (!/^[A-Z]{2}$/.test(config.spotifyMarket)) {
     throw new ConfigurationError('SPOTIFY_MARKET must be a 2-letter country code, e.g. US');
+  }
+
+  if (!/^[A-Z]{2}$/.test(config.tidalCountryCode)) {
+    throw new ConfigurationError('TIDAL_COUNTRY_CODE must be a 2-letter country code, e.g. US');
   }
 
   return Object.freeze(config);

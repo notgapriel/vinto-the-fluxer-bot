@@ -16,6 +16,7 @@ type SpotifyTrackLike = Record<string, unknown> & {
   href?: unknown;
   preview_url?: unknown;
   duration_ms?: unknown;
+  external_ids?: { isrc?: unknown } | null;
   album?: unknown;
   track?: unknown;
   is_local?: unknown;
@@ -159,6 +160,7 @@ export const spotifyMethods: LooseMethodMap = {
     const spotifyUrl = String(typedMeta?.external_urls?.spotify ?? typedMeta?.href ?? '').trim();
     const previewUrl = String(typedMeta?.preview_url ?? '').trim() || null;
     const durationMs = normalizeSpotifyDurationMs(typedMeta?.duration_ms);
+    const isrc = String(typedMeta?.external_ids?.isrc ?? '').trim() || null;
 
     return this._buildTrack({
       title: String(typedMeta?.name ?? 'Spotify track').trim() || 'Spotify track',
@@ -170,6 +172,7 @@ export const spotifyMethods: LooseMethodMap = {
       artist,
       spotifyTrackId,
       spotifyPreviewUrl: isHttpUrl(previewUrl) ? previewUrl : null,
+      isrc,
       isPreview: false,
     });
   },
@@ -247,6 +250,7 @@ export const spotifyMethods: LooseMethodMap = {
       title: metadataTrack.title,
       artist: metadataTrack.artist,
       durationInSec,
+      isrc: metadataTrack.isrc,
     }], requestedBy, 'spotify');
   },
 

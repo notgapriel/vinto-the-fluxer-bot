@@ -107,10 +107,13 @@ interface MusicPlayerOptions {
   enableYtPlayback?: boolean;
   enableSpotifyImport?: boolean;
   enableDeezerImport?: boolean;
+  enableTidalImport?: boolean;
   spotifyClientId?: string | null;
   spotifyClientSecret?: string | null;
   spotifyRefreshToken?: string | null;
   spotifyMarket?: string | null;
+  tidalToken?: string | null;
+  tidalCountryCode?: string | null;
   deezerArl?: string | null;
   deezerTrackFormats?: string[] | string | null;
   soundcloudClientId?: string | null;
@@ -164,6 +167,7 @@ type BuiltTrackInput = {
   deezerFullStreamUrl?: string | null;
   spotifyTrackId?: string | null;
   spotifyPreviewUrl?: string | null;
+  isrc?: string | null;
   isPreview?: boolean;
   isLive?: boolean;
   seekStartSec?: number;
@@ -222,6 +226,11 @@ export class MusicPlayer extends EventEmitter {
   declare _resolveSpotifyArtist: BivariantCallback<[string, (string | null | undefined)?], Promise<Track[]>>;
   declare _resolveSpotifyByGuess: BivariantCallback<[string, (string | null | undefined)?], Promise<Track[]>>;
   declare _spotifyApiRequest: (pathname: string, query?: Record<string, unknown>) => Promise<unknown>;
+  declare _resolveTidalTrack: BivariantCallback<[string, (string | null | undefined)?], Promise<Track[]>>;
+  declare _resolveTidalCollection: BivariantCallback<[string, (string | null | undefined)?, (number | null | undefined)?], Promise<Track[]>>;
+  declare _resolveTidalMix: BivariantCallback<[string, (string | null | undefined)?, (number | null | undefined)?], Promise<Track[]>>;
+  declare _resolveTidalByGuess: BivariantCallback<[string, (string | null | undefined)?, (number | null | undefined)?], Promise<Track[]>>;
+  declare _tidalApiRequest: (pathname: string, query?: Record<string, unknown>) => Promise<unknown>;
   declare _resolveSingleYouTubeTrack: BivariantCallback<[string, (string | null | undefined)?], Promise<Track[]>>;
   declare _resolveYouTubePlaylistTracks: BivariantCallback<
     [string, (string | null | undefined)?, ({ fallbackWatchUrl?: string | null | undefined } | undefined)?],
@@ -269,10 +278,13 @@ export class MusicPlayer extends EventEmitter {
   enableYtPlayback: boolean;
   enableSpotifyImport: boolean;
   enableDeezerImport: boolean;
+  enableTidalImport: boolean;
   spotifyClientId: string | null;
   spotifyClientSecret: string | null;
   spotifyRefreshToken: string | null;
   spotifyMarket: string;
+  tidalToken: string | null;
+  tidalCountryCode: string;
   deezerArl: string | null;
   _deezerCookieHeader: string | null;
   _deezerSessionTokens: unknown;
@@ -346,10 +358,13 @@ export class MusicPlayer extends EventEmitter {
     this.enableYtPlayback = options.enableYtPlayback !== false;
     this.enableSpotifyImport = options.enableSpotifyImport !== false;
     this.enableDeezerImport = options.enableDeezerImport !== false;
+    this.enableTidalImport = options.enableTidalImport !== false;
     this.spotifyClientId = String(options.spotifyClientId ?? process.env.SPOTIFY_CLIENT_ID ?? '').trim() || null;
     this.spotifyClientSecret = String(options.spotifyClientSecret ?? process.env.SPOTIFY_CLIENT_SECRET ?? '').trim() || null;
     this.spotifyRefreshToken = String(options.spotifyRefreshToken ?? process.env.SPOTIFY_REFRESH_TOKEN ?? '').trim() || null;
     this.spotifyMarket = String(options.spotifyMarket ?? process.env.SPOTIFY_MARKET ?? 'US').trim().toUpperCase() || 'US';
+    this.tidalToken = String(options.tidalToken ?? process.env.TIDAL_TOKEN ?? '').trim() || null;
+    this.tidalCountryCode = String(options.tidalCountryCode ?? process.env.TIDAL_COUNTRY_CODE ?? 'US').trim().toUpperCase() || 'US';
     this.deezerArl = String(options.deezerArl ?? process.env.DEEZER_ARL ?? '').trim() || null;
     this.deezerTrackFormats = normalizeDeezerTrackFormats(
       options.deezerTrackFormats ?? process.env.DEEZER_TRACK_FORMATS ?? null
