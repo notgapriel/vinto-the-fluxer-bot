@@ -523,6 +523,69 @@ test('persistent restore does not depend on guild-wide 24/7 flag anymore', async
   assert.equal(patches.length, 1);
 });
 
+test('persistent restore retries transient voice server update timeout before failing', async () => {
+  const calls: string[] = [];
+  const manager = createManager({
+    library: {
+      async listPersistentVoiceConnections() {
+        return [{
+          guildId: '303030',
+          voiceChannelId: '505050',
+          textChannelId: '707070',
+          updatedAt: new Date(),
+        }];
+      },
+      async patchGuildFeatureConfig() {
+        calls.push('sync');
+        return {};
+      },
+    },
+  });
+
+  manager.ensure = (async (guildId: string) => {
+    const session = createSession({
+      guildId,
+      voiceChannelId: null,
+      textChannelId: null,
+      stayInVoiceEnabled: true,
+    });
+    let connectAttempts = 0;
+    session.connection.connect = async function connect(channelId: string) {
+      connectAttempts += 1;
+      calls.push(`connect:${connectAttempts}`);
+      if (connectAttempts === 1) {
+        throw new Error('Timeout waiting for VOICE_SERVER_UPDATE.');
+      }
+      this.connected = true;
+      this.channelId = channelId;
+    };
+    session.connection.disconnect = async function disconnect() {
+      calls.push('disconnect');
+      this.connected = false;
+      this.channelId = null;
+    };
+    session.sessionId = `${guildId}:505050`;
+    manager.sessions.set(session.sessionId!, session as unknown as Parameters<typeof manager.sessions.set>[1]);
+    return session;
+  }) as unknown as SessionManager['ensure'];
+  manager.restoreSessionSnapshot = async () => {
+    calls.push('restore');
+    return true;
+  };
+
+  const results = await manager.restorePersistentVoiceSessions();
+  assert.deepEqual(calls, [
+    'connect:1',
+    'disconnect',
+    'connect:2',
+    'restore',
+    'sync',
+  ]);
+  assert.equal(results.length, 1);
+  assert.equal(results[0]!.restored, true);
+  assert.equal(results[0]!.reason, 'connected');
+});
+
 test('missing persistent voice channel is cleared before restore attempt', async () => {
   const patches: Array<{ guildId: string; patch: Record<string, unknown> }> = [];
   const deletedSnapshots: Array<{ guildId: string; voiceChannelId: string }> = [];

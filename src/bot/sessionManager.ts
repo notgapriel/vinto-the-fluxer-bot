@@ -24,6 +24,20 @@ import {
 } from './sessionManager/runtimeHelpers.ts';
 import { runtimeMethods } from './sessionManager/runtimeMethods.ts';
 
+const PERSISTENT_RESTORE_CONNECT_RETRY_ATTEMPTS = 3;
+const PERSISTENT_RESTORE_CONNECT_RETRY_DELAY_MS = 250;
+
+function isRetryablePersistentRestoreConnectFailure(error: unknown): boolean {
+  const message = String((error as { message?: unknown } | null | undefined)?.message ?? '').toLowerCase();
+  return message.includes('timeout waiting for voice_server_update');
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 export class SessionManager extends EventEmitter {
   [key: string]: unknown;
   declare _startSnapshotFlushLoop: () => void;
@@ -662,7 +676,35 @@ export class SessionManager extends EventEmitter {
         if (typeof session.connection.connect !== 'function') {
           throw new Error('Session connection cannot connect.');
         }
-        await session.connection.connect(voiceChannelId);
+        let lastConnectError: unknown = null;
+        for (let attempt = 1; attempt <= PERSISTENT_RESTORE_CONNECT_RETRY_ATTEMPTS; attempt += 1) {
+          try {
+            await session.connection.connect(voiceChannelId);
+            lastConnectError = null;
+            break;
+          } catch (err) {
+            lastConnectError = err;
+            const shouldRetry = (
+              attempt < PERSISTENT_RESTORE_CONNECT_RETRY_ATTEMPTS
+              && isRetryablePersistentRestoreConnectFailure(err)
+            );
+            if (!shouldRetry) {
+              throw err;
+            }
+            this.logger?.warn?.('Retrying persistent voice session restore after transient voice connect failure', {
+              guildId,
+              channelId: voiceChannelId,
+              attempt,
+              maxAttempts: PERSISTENT_RESTORE_CONNECT_RETRY_ATTEMPTS,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            await session.connection.disconnect?.().catch(() => null);
+            await delay(PERSISTENT_RESTORE_CONNECT_RETRY_DELAY_MS);
+          }
+        }
+        if (lastConnectError) {
+          throw lastConnectError;
+        }
         await this.restoreSessionSnapshot(session).catch((err: unknown) => {
           this.logger?.warn?.('Failed to restore persistent playback snapshot', {
             guildId,
