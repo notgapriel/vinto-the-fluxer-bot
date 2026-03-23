@@ -1,0 +1,81 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+
+import { CommandRouter } from '../src/bot/commandRouter.ts';
+
+function createRouter(sessions: EventEmitter) {
+  return new CommandRouter({
+    config: {
+      prefix: '!',
+      enableEmbeds: true,
+      commandRateLimitEnabled: false,
+      commandUserWindowMs: 10_000,
+      commandUserMax: 10,
+      commandGuildWindowMs: 10_000,
+      commandGuildMax: 100,
+      commandRateLimitBypass: [],
+      sessionIdleMs: 300_000,
+    },
+    rest: {
+      async sendTyping() {},
+      async sendMessage() {
+        return { id: 'message-1' };
+      },
+      async editMessage() {},
+    },
+    gateway: {
+      on() {},
+      off() {},
+    },
+    sessions: sessions as ConstructorParameters<typeof CommandRouter>[0]['sessions'],
+    guildConfigs: null,
+    voiceStateStore: {
+      countUsersInChannel() {
+        return 1;
+      },
+    },
+    lyrics: null,
+    library: null,
+    permissionService: null,
+    botUserId: 'bot-1',
+    startedAt: Date.now(),
+  } as ConstructorParameters<typeof CommandRouter>[0]);
+}
+
+test('trackStart popup includes the active voice channel mention', async () => {
+  const sessions = new EventEmitter();
+  const router = createRouter(sessions);
+  const calls: Array<{ channelId: string; type: string; text: string }> = [];
+
+  router._safeReply = (async (channelId: string, type: string, text: string) => {
+    calls.push({ channelId, type, text });
+    return null;
+  }) as CommandRouter['_safeReply'];
+
+  try {
+    sessions.emit('trackStart', {
+      session: {
+        textChannelId: 'text-1',
+        connection: { channelId: 'voice-1' },
+        settings: {},
+      },
+      track: {
+        title: 'Demo Track',
+        duration: '3:00',
+        source: 'youtube',
+      },
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    if (router.sessionPanelLiveHandle) clearInterval(router.sessionPanelLiveHandle);
+    if (router.weeklySweepHandle) clearInterval(router.weeklySweepHandle);
+  }
+
+  assert.deepEqual(calls, [{
+    channelId: 'text-1',
+    type: 'info',
+    text: 'Now playing in <#voice-1>: **Demo Track** (3:00)',
+  }]);
+});

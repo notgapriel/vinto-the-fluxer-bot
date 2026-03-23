@@ -550,6 +550,8 @@ export class CommandRouter {
       const { session, track } = payload ?? {};
       const channelId = this._resolveEventChannelId(session);
       if (!channelId || !track) return;
+      const voiceChannelId = String(session?.connection?.channelId ?? '').trim();
+      const voiceChannelTag = voiceChannelId ? ` in <#${voiceChannelId}>` : '';
       const isYouTubeMixPlaceholder = String(track?.source ?? '').trim().toLowerCase() === 'youtube'
         && String(track?.title ?? '').trim() === 'YouTube Mix Track'
         && String(track?.duration ?? '').trim().toLowerCase() === 'unknown';
@@ -560,12 +562,12 @@ export class CommandRouter {
       await this._safeReply(
         channelId,
         'info',
-        `Now playing: **${track.title}** (${track.duration})`,
+        `Now playing${voiceChannelTag}: **${track.title}** (${track.duration})`,
         null,
         null,
         session?.settings?.minimalMode ? { minimalMode: true } : undefined
       );
-      await this._emitWebhookEvent(session, 'track_start', `Now playing: ${summarizeTrack(track)}`);
+      await this._emitWebhookEvent(session, 'track_start', `Now playing${voiceChannelTag}: ${summarizeTrack(track)}`);
     });
 
     this.sessions.on('trackError', async (payload?: SessionEventPayload) => {

@@ -333,6 +333,9 @@ export function registerConfigCommands(registry: RegistryLike, h: ConfigCommandH
       const stayInVoiceEnabled = typeof profile?.stayInVoiceEnabled === 'boolean'
         ? profile.stayInVoiceEnabled
         : (session?.settings?.stayInVoiceEnabled ?? Boolean(ctx.config.defaultStayInVoiceEnabled));
+      const stayInVoiceLabel = activeVoiceChannelId
+        ? `<#${activeVoiceChannelId}>: ${stayInVoiceEnabled ? 'on' : 'off'}`
+        : `${stayInVoiceEnabled ? 'on' : 'off'} (no active voice channel)`;
       const roles = guildConfig.settings.djRoleIds.length
         ? guildConfig.settings.djRoleIds.map((id) => `<@&${id}>`).join(', ')
         : 'none';
@@ -342,7 +345,7 @@ export function registerConfigCommands(registry: RegistryLike, h: ConfigCommandH
         { name: 'Dedupe', value: guildConfig.settings.dedupeEnabled ? 'on' : 'off', inline: true },
         { name: 'Minimal Mode', value: guildConfig.settings.minimalMode ? 'on' : 'off', inline: true },
         { name: 'Default Volume', value: `${guildConfig.settings.volumePercent}%`, inline: true },
-        { name: '24/7', value: stayInVoiceEnabled ? 'on' : 'off', inline: true },
+        { name: '24/7', value: stayInVoiceLabel, inline: true },
         { name: 'Vote Ratio', value: String(guildConfig.settings.voteSkipRatio), inline: true },
         { name: 'Vote Min', value: String(guildConfig.settings.voteSkipMinVotes), inline: true },
         { name: 'DJ Roles', value: roles },
