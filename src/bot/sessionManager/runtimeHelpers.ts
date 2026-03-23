@@ -112,7 +112,8 @@ export function isSnapshotTrackDirectlyPlayable(track: Partial<Track> | null | u
   if (track.deezerTrackId || source.startsWith('deezer')) return true;
   if (source.startsWith('audius')) return true;
   if (source.startsWith('soundcloud')) return true;
-  if (track.isLive || source.startsWith('radio')) return isHttpUrl(url);
+  if (source.startsWith('radio')) return false;
+  if (track.isLive) return isHttpUrl(url);
   if ((source === 'http-audio' || source === 'url') && isHttpUrl(url)) return true;
 
   return false;

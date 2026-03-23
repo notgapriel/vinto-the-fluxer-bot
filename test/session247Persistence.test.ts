@@ -989,6 +989,86 @@ test('session snapshot restore re-resolves metadata-only tracks before playback'
   ]);
 });
 
+test('session snapshot restore re-resolves radio streams before playback', async () => {
+  const calls: unknown[][] = [];
+  const manager = createManager({
+    library: {
+      async getSessionSnapshot() {
+        return {
+          state: {
+            playing: true,
+            paused: false,
+            loopMode: 'off',
+            volumePercent: 100,
+            progressSec: 0,
+          },
+          currentTrack: {
+            title: 'BBC Radio 1Xtra',
+            url: 'http://as-hls-ww-live.akamaized.net/pool_92079267/live/ww/bbc_1xtra/bbc_1xtra.isml/bbc_1xtra-audio%3d96000.norewind.m3u8',
+            duration: 'Live',
+            source: 'radio-stream',
+            requestedBy: 'user-1',
+            isLive: true,
+          },
+          pendingTracks: [],
+        };
+      },
+    },
+  });
+
+  const session = createSession({
+    guildId: '161616',
+    voiceChannelId: '383838',
+    textChannelId: '606060',
+    stayInVoiceEnabled: true,
+  });
+  session.player = {
+    setVolumePercent(value) {
+      calls.push(['volume', value]);
+    },
+    setLoopMode(value) {
+      calls.push(['loop', value]);
+    },
+    async previewTracks(query: string, options: { requestedBy?: string | null }) {
+      calls.push(['preview', query, options.requestedBy]);
+      return [{
+        title: 'BBC Radio 1Xtra',
+        url: 'https://stream.live.vinto.test/bbc1xtra.m3u8',
+        duration: 'Live',
+        source: 'radio-stream',
+        requestedBy: options.requestedBy ?? null,
+        isLive: true,
+      }];
+    },
+    createTrackFromData(track) {
+      calls.push(['create', track.title, track.url, track.seekStartSec ?? 0]);
+      return { ...track };
+    },
+    clearQueue() {
+      calls.push(['clear']);
+    },
+    enqueueResolvedTracks(tracks) {
+      calls.push(['enqueue', tracks.map((track) => track.title)]);
+      return tracks;
+    },
+    async play() {
+      calls.push(['play']);
+    },
+  };
+
+  const restored = await manager.restoreSessionSnapshot(session);
+  assert.equal(restored, true);
+  assert.deepEqual(calls, [
+    ['volume', 100],
+    ['loop', 'off'],
+    ['preview', 'http://as-hls-ww-live.akamaized.net/pool_92079267/live/ww/bbc_1xtra/bbc_1xtra.isml/bbc_1xtra-audio%3d96000.norewind.m3u8', 'user-1'],
+    ['create', 'BBC Radio 1Xtra', 'https://stream.live.vinto.test/bbc1xtra.m3u8', 0],
+    ['clear'],
+    ['enqueue', ['BBC Radio 1Xtra']],
+    ['play'],
+  ]);
+});
+
 test('session snapshot restore clears persisted Deezer full stream URLs so tracks are rehydrated from track id', async () => {
   const calls: unknown[][] = [];
   const manager = createManager({
