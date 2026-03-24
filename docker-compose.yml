@@ -5,8 +5,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
-      mongo:
-        condition: service_healthy
+      - mongo
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
       NODE_ENV: production
@@ -46,7 +45,7 @@ services:
     volumes:
       - mongo_data:/data/db
     healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
+      test: ["CMD-SHELL", "mongosh --quiet --host 127.0.0.1 --eval \"quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)\""]
       interval: 10s
       timeout: 5s
       retries: 10
