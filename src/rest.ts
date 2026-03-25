@@ -508,6 +508,16 @@ export class RestClient {
       retryUnsafe: true,
     });
   }
+
+  async removeUserReactionFromMessage(channelId: string, messageId: string, emoji: string, userId: string, options: ReactionOptions = {}) {
+    const encoded = encodeURIComponent(String(emoji ?? '').trim());
+    const query: Record<string, string> = {};
+    if (options?.sessionId != null) query.session_id = options.sessionId;
+    return this.request('DELETE', `/channels/${channelId}/messages/${messageId}/reactions/${encoded}/${userId}`, {
+      query,
+      retryUnsafe: true,
+    });
+  }
 }
 
 export { RestError };

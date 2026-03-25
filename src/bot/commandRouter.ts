@@ -5,6 +5,7 @@ import { CommandRegistry } from './commandRegistry.ts';
 import { registerCommands } from './commands/index.ts';
 import { CommandRateLimiter } from './services/commandRateLimiter.ts';
 import {
+  SEARCH_PICK_EMOJIS,
   buildCommandReplyOptions,
   isDirectBotMention,
   isLeftEmoji,
@@ -54,6 +55,7 @@ type RouterRest = {
   sendTyping: (channelId: string) => Promise<unknown>;
   editMessage: (channelId: string, messageId: string, payload: MessagePayload) => Promise<unknown>;
   addReactionToMessage?: (channelId: string, messageId: string, emoji: string) => Promise<unknown>;
+  removeUserReactionFromMessage?: (channelId: string, messageId: string, emoji: string, userId: string) => Promise<unknown>;
   sendMessage: (channelId: string, payload: MessagePayload) => Promise<unknown>;
   listCurrentUserGuilds?: (options?: { limit?: number; after?: string | null }) => Promise<unknown>;
 };
@@ -387,6 +389,8 @@ export class CommandRouter {
     if (pageState) {
       const direction = isLeftEmoji(emoji) ? -1 : (isRightEmoji(emoji) ? 1 : 0);
       if (direction !== 0) {
+        const reactionEmoji = direction < 0 ? '\u2B05\uFE0F' : '\u27A1\uFE0F';
+        await this.rest.removeUserReactionFromMessage?.(String(channelId), String(messageId), reactionEmoji, String(userId)).catch(() => null);
         const nextIndex = Math.max(0, Math.min(pageState.pages.length - 1, pageState.index + direction));
         if (nextIndex !== pageState.index) {
           pageState.index = nextIndex;
@@ -416,6 +420,8 @@ export class CommandRouter {
         return;
       }
 
+      const reactionEmoji = SEARCH_PICK_EMOJIS[pickedIndex - 1] ?? emoji;
+      await this.rest.removeUserReactionFromMessage?.(String(channelId), String(messageId), reactionEmoji, String(userId)).catch(() => null);
       this.searchReactionSelections.delete(String(messageId));
       await this._applySearchReactionSelection(searchState, pickedIndex, userId);
       return;
