@@ -102,6 +102,25 @@ test('external bot disconnect destroys lingering guild voice sessions', async ()
   assert.equal(manager.listByGuild('guild-1').length, 0);
 });
 
+test('external bot disconnect is ignored while suppression window is active', async () => {
+  const manager = createManager();
+
+  const session = await manager.ensure('guild-1', null, { voiceChannelId: 'voice-a' });
+  session.connection.channelId = 'voice-a';
+  manager._clearIdleTimer(session);
+  manager._suppressExternalDisconnect('guild-1', 5_000);
+
+  manager.gateway.emit('VOICE_STATE_UPDATE', {
+    guild_id: 'guild-1',
+    user_id: 'bot-1',
+    channel_id: null,
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(manager.listByGuild('guild-1').length, 1);
+});
+
 
 
 

@@ -91,6 +91,7 @@ export class SessionManager extends EventEmitter {
   botUserId: string | null;
   sessions: Map<string, Session>;
   snapshotFlushHandle: NodeJS.Timeout | null;
+  externalDisconnectSuppressedUntilByGuild: Map<string, number>;
 
   constructor(options: SessionManagerOptions) {
     super();
@@ -106,6 +107,7 @@ export class SessionManager extends EventEmitter {
 
     this.sessions = new Map();
     this.snapshotFlushHandle = null;
+    this.externalDisconnectSuppressedUntilByGuild = new Map();
     this._startSnapshotFlushLoop();
 
     const gatewayWithVoiceStateEvents = this.gateway as typeof this.gateway & {
@@ -133,6 +135,15 @@ export class SessionManager extends EventEmitter {
       return;
     }
 
+    const suppressedUntil = this.externalDisconnectSuppressedUntilByGuild.get(guildId) ?? 0;
+    if (suppressedUntil > Date.now()) {
+      this.logger?.debug?.('Ignoring bot voice disconnect during suppressed window', {
+        guildId,
+        suppressedUntil,
+      });
+      return;
+    }
+
     const sessions = this.listByGuild(guildId).filter((session) => (
       Boolean(normalizeSessionChannelId(session?.connection?.channelId))
       || Boolean(normalizeSessionChannelId(session?.targetVoiceChannelId))
@@ -152,6 +163,17 @@ export class SessionManager extends EventEmitter {
       await this.destroy(guildId, 'external_voice_disconnect', {
         sessionId: session.sessionId!,
       }).catch(() => null);
+    }
+  }
+
+  _suppressExternalDisconnect(guildId: string, durationMs: number): void {
+    const safeGuildId = String(guildId ?? '').trim();
+    if (!safeGuildId) return;
+
+    const nextUntil = Date.now() + Math.max(250, Number.parseInt(String(durationMs ?? 0), 10) || 0);
+    const currentUntil = this.externalDisconnectSuppressedUntilByGuild.get(safeGuildId) ?? 0;
+    if (nextUntil > currentUntil) {
+      this.externalDisconnectSuppressedUntilByGuild.set(safeGuildId, nextUntil);
     }
   }
 
@@ -696,6 +718,8 @@ export class SessionManager extends EventEmitter {
       const textChannelId = normalizeSessionChannelId(binding?.textChannelId);
       if (!guildId || !voiceChannelId) continue;
 
+      this._suppressExternalDisconnect(guildId, 45_000);
+
       const guildConfig = await this._loadGuildConfig(guildId);
 
       const channelState = await this._inspectPersistentVoiceChannel(guildId, voiceChannelId);
@@ -719,6 +743,7 @@ export class SessionManager extends EventEmitter {
             error: err instanceof Error ? err.message : String(err),
           });
         });
+        this._suppressExternalDisconnect(guildId, 15_000);
         await this.syncPersistentVoiceState(guildId).catch(() => null);
         results.push({ guildId, voiceChannelId, textChannelId, restored: true, reason: 'already_connected' });
         continue;
@@ -731,7 +756,9 @@ export class SessionManager extends EventEmitter {
         let lastConnectError: unknown = null;
         for (let attempt = 1; attempt <= PERSISTENT_RESTORE_CONNECT_RETRY_ATTEMPTS; attempt += 1) {
           try {
+            this._suppressExternalDisconnect(guildId, 45_000);
             await session.connection.connect(voiceChannelId);
+            this._suppressExternalDisconnect(guildId, 15_000);
             lastConnectError = null;
             break;
           } catch (err) {
