@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { ValidationError } from '../../core/errors.ts';
 import {
   createCommand,
@@ -16,7 +17,9 @@ import {
   requireLibrary,
   ensureSessionTrack,
   computeVoteSkipRequirement,
-  fetchGlobalGuildAndUserCounts,
+  fetchCachedGlobalGuildAndUserCounts,
+  fetchGlobalGuildCount,
+  getCachedGlobalGuildAndUserCounts,
   formatUptimeCompact,
 } from './commandHelpers.ts';
 import { createProgressReporter } from './responseUtils.ts';
@@ -24,7 +27,7 @@ import type { CommandRegistry } from '../commandRegistry.ts';
 import type { CommandContextLike, SessionLike, TrackDataLike } from './helpers/types.ts';
 import type { MessagePayload } from '../../types/core.ts';
 
-const DIAG_OWNER_USER_ID = '1474761291856015469';
+const DIAG_OWNER_USER_ID = String(process.env.BOT_OWNER_USER_ID ?? '').trim() || null;
 type DiagnosticPayload = Record<string, unknown> | null;
 type VoicePumpDiagnostics = {
   framesCaptured?: unknown;
@@ -90,10 +93,13 @@ type TrackDiagAggregate = {
 };
 const diagSnapshotsByGuild = new Map<string, DiagnosticsSnapshot>();
 const diagTrackMonitorsByGuild = new Map<string, { cleanup?: () => void }>();
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
+  ...args: string[]
+) => (...fnArgs: unknown[]) => Promise<unknown>;
 
 function ensureDiagOwner(ctx: QueueEffectsContext) {
   const userId = String(ctx?.authorId ?? '').trim();
-  if (userId === DIAG_OWNER_USER_ID) return;
+  if (DIAG_OWNER_USER_ID && userId === DIAG_OWNER_USER_ID) return;
   throw new ValidationError('This command is restricted to the bot owner.');
 }
 
@@ -276,6 +282,54 @@ function splitTextIntoPages(text: unknown, maxChars: number = 900) {
   return pages.filter(Boolean);
 }
 
+function formatEvalResult(value: unknown) {
+  if (typeof value === 'string') return value;
+  return inspect(value, {
+    depth: 4,
+    breakLength: 100,
+    maxArrayLength: 100,
+    maxStringLength: 20_000,
+  });
+}
+
+function wrapCodeBlock(text: string, language: string = 'js') {
+  return `\`\`\`${language}\n${text}\n\`\`\``;
+}
+
+function buildEvalPagePayload(content: string): MessagePayload {
+  return {
+    content,
+    allowed_mentions: {
+      parse: [],
+      users: [],
+      roles: [],
+      replied_user: false,
+    },
+  };
+}
+
+async function executeOwnerEval(code: string, ctx: QueueEffectsContext) {
+  try {
+    const expressionExecutor = new AsyncFunction(
+      'ctx',
+      'process',
+      'globalThis',
+      '"use strict"; return (' + code + ');'
+    );
+    return await expressionExecutor(ctx, process, globalThis);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+  }
+
+  const statementExecutor = new AsyncFunction(
+    'ctx',
+    'process',
+    'globalThis',
+    `"use strict";\n${code}`
+  );
+  return statementExecutor(ctx, process, globalThis);
+}
+
 function buildLyricsPagePayload(
   ctx: QueueEffectsContext,
   title: string,
@@ -311,6 +365,54 @@ function buildLyricsPagePayload(
 }
 
 export function registerQueueEffectsAndMiscCommands(registry: CommandRegistry) {
+  registry.register(createCommand({
+    name: 'eval',
+    description: 'Owner-only JavaScript evaluation.',
+    usage: 'eval <code>',
+    hidden: true,
+    async execute(ctx: CommandContextLike) {
+      const typedCtx = ctx as QueueEffectsContext;
+      ensureDiagOwner(typedCtx);
+
+      const code = String(ctx.args.join(' ') ?? '').trim();
+      if (!code) {
+        throw new ValidationError(`Usage: ${ctx.prefix}eval <code>`);
+      }
+
+      try {
+        const result = await executeOwnerEval(code, typedCtx);
+        const rendered = formatEvalResult(result);
+        const pages = splitTextIntoPages(rendered, 1_700);
+
+        if (!pages.length) {
+          await typedCtx.reply.success('Eval completed with no output.');
+          return;
+        }
+
+        if (pages.length === 1) {
+          await typedCtx.sendPaginated([buildEvalPagePayload(wrapCodeBlock(pages[0] ?? '', 'js').slice(0, 1_950))]);
+          return;
+        }
+
+        await typedCtx.sendPaginated(
+          pages.map((page, index) => buildEvalPagePayload(
+            `${wrapCodeBlock(page, 'js')}\nPage ${index + 1}/${pages.length}`.slice(0, 1_950)
+          ))
+        );
+      } catch (error) {
+        const rendered = error instanceof Error
+          ? `${error.name}: ${error.message}\n${error.stack ?? ''}`.trim()
+          : formatEvalResult(error);
+        const pages = splitTextIntoPages(rendered, 1_700);
+        await typedCtx.sendPaginated(
+          (pages.length ? pages : ['Unknown eval error']).map((page, index) => buildEvalPagePayload(
+            `${wrapCodeBlock(page, 'txt')}\nError ${index + 1}/${Math.max(1, pages.length)}`.slice(0, 1_950)
+          ))
+        );
+      }
+    },
+  }));
+
   registry.register(createCommand({
     name: 'diag',
     aliases: ['audiodiag'],
@@ -767,15 +869,35 @@ export function registerQueueEffectsAndMiscCommands(registry: CommandRegistry) {
       const progress = await createProgressReporter(typedCtx, 'Collecting runtime statistics...', null, null, { replyReference: true });
       const uptimeSeconds = Math.floor((Date.now() - (typedCtx.startedAt ?? Date.now())) / 1000);
       const mem = process.memoryUsage();
+      const cachedCounts = getCachedGlobalGuildAndUserCounts(typedCtx.rest);
       await progress.info('Runtime statistics', [
         { name: 'Uptime', value: formatUptimeCompact(uptimeSeconds), inline: true },
         { name: 'Guild sessions', value: String(typedCtx.sessions.sessions?.size ?? 0), inline: true },
-        { name: 'Servers total', value: 'counting...', inline: true },
-        { name: 'Users total', value: 'counting...', inline: true },
+        { name: 'Servers total', value: cachedCounts?.guildCount == null ? 'counting...' : String(cachedCounts.guildCount), inline: true },
+        {
+          name: 'Users total',
+          value: cachedCounts?.userCount == null
+            ? 'counting...'
+            : (cachedCounts.incompleteGuildCount > 0 ? `${cachedCounts.userCount} (partial)` : String(cachedCounts.userCount)),
+          inline: true,
+        },
         { name: 'Heap Used', value: `${Math.round(mem.heapUsed / 1024 / 1024)} MB`, inline: true },
       ]);
 
-      const globalCounts = await fetchGlobalGuildAndUserCounts(typedCtx.rest).catch(() => null);
+      if (cachedCounts?.guildCount == null) {
+        const fastGuildCount = await fetchGlobalGuildCount(typedCtx.rest).catch(() => null);
+        if (fastGuildCount != null) {
+          await progress.info('Runtime statistics', [
+            { name: 'Uptime', value: formatUptimeCompact(uptimeSeconds), inline: true },
+            { name: 'Guild sessions', value: String(typedCtx.sessions.sessions?.size ?? 0), inline: true },
+            { name: 'Servers total', value: String(fastGuildCount), inline: true },
+            { name: 'Users total', value: 'counting...', inline: true },
+            { name: 'Heap Used', value: `${Math.round(mem.heapUsed / 1024 / 1024)} MB`, inline: true },
+          ]);
+        }
+      }
+
+      const globalCounts = await fetchCachedGlobalGuildAndUserCounts(typedCtx.rest).catch(() => null);
       const serverCountLabel = globalCounts?.guildCount == null
         ? 'n/a'
         : String(globalCounts.guildCount);

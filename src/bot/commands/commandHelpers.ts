@@ -25,6 +25,12 @@ export {
 } from './helpers/formatting.ts';
 
 export { fetchGlobalGuildAndUserCounts } from './helpers/guildStats.ts';
+export {
+  clearGlobalGuildAndUserCountsCache,
+  fetchCachedGlobalGuildAndUserCounts,
+  fetchGlobalGuildCount,
+  getCachedGlobalGuildAndUserCounts,
+} from './helpers/guildStats.ts';
 
 export {
   applyVoiceProfileIfConfigured,
