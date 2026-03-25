@@ -108,7 +108,11 @@ export class SessionManager extends EventEmitter {
     this.snapshotFlushHandle = null;
     this._startSnapshotFlushLoop();
 
-    this.gateway.on('VOICE_STATE_UPDATE', (payload: GatewayVoiceStateUpdate) => {
+    const gatewayWithVoiceStateEvents = this.gateway as typeof this.gateway & {
+      on: (event: string, listener: (payload: GatewayVoiceStateUpdate) => void) => void;
+    };
+
+    gatewayWithVoiceStateEvents.on('VOICE_STATE_UPDATE', (payload: GatewayVoiceStateUpdate) => {
       this._handleBotVoiceStateUpdate(payload).catch((err) => {
         this.logger?.debug?.('Failed to handle bot voice state update', {
           guildId: payload?.guild_id ?? null,
