@@ -511,7 +511,7 @@ export const deezerMethods: LooseMethodMap = {
       const body = await response.json().catch(() => null);
       const variant = this._resolveDeezerMediaVariantFromResponse(body);
       if (variant?.url) {
-        this._deezerStreamMetaByTrackId.set(safeTrackId, {
+        this._setDeezerStreamMeta(safeTrackId, {
           url: variant.url,
           cipherType: variant.cipherType || 'BF_CBC_STRIPE',
           format: variant.format || null,
@@ -532,7 +532,7 @@ export const deezerMethods: LooseMethodMap = {
       ? await this._resolveDeezerLegacyEncryptedStreamUrl(apiToken, safeTrackId, this.deezerTrackFormats[0]).catch(() => null)
       : null;
     if (legacy?.url) {
-      this._deezerStreamMetaByTrackId.set(safeTrackId, {
+      this._setDeezerStreamMeta(safeTrackId, {
         url: legacy.url,
         cipherType: legacy.cipherType || 'BF_CBC_STRIPE',
         format: legacy.format || null,
@@ -631,9 +631,10 @@ export const deezerMethods: LooseMethodMap = {
 
     const onClose = () => {
       closed = true;
-      try {
-        activeReader?.cancel?.();
-      } catch {}
+      const reader = activeReader;
+      activeReader = null;
+      if (!reader?.cancel) return;
+      void Promise.resolve(reader.cancel()).catch(() => null);
     };
     out.once('close', onClose);
     out.once('error', onClose);

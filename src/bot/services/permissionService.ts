@@ -93,6 +93,9 @@ type PermissionServiceOptions = {
     debug?: (message: string, meta?: Record<string, unknown>) => void;
   } | null;
   cacheTtlMs?: number;
+  maxGuildMemberCacheSize?: number;
+  maxGuildCacheSize?: number;
+  maxChannelPermCacheSize?: number;
 };
 
 export class PermissionService {
@@ -100,6 +103,9 @@ export class PermissionService {
   botUserId: string | null;
   logger: PermissionServiceOptions['logger'];
   cacheTtlMs: number;
+  maxGuildMemberCacheSize: number;
+  maxGuildCacheSize: number;
+  maxChannelPermCacheSize: number;
   guildMemberCache: Map<string, CachedEntry<unknown>>;
   guildCache: Map<string, CachedEntry<unknown>>;
   channelPermCache: Map<string, CachedEntry<PermissionResolution>>;
@@ -109,6 +115,9 @@ export class PermissionService {
     this.botUserId = options.botUserId ? String(options.botUserId) : null;
     this.logger = options.logger;
     this.cacheTtlMs = options.cacheTtlMs ?? 30_000;
+    this.maxGuildMemberCacheSize = options.maxGuildMemberCacheSize ?? 2_000;
+    this.maxGuildCacheSize = options.maxGuildCacheSize ?? 500;
+    this.maxChannelPermCacheSize = options.maxChannelPermCacheSize ?? 5_000;
 
     this.guildMemberCache = new Map();
     this.guildCache = new Map();
@@ -162,7 +171,7 @@ export class PermissionService {
         channel as ChannelPayload
       );
       const result = this._fromBits(effectivePerms);
-      this._setCached(this.channelPermCache, cacheKey, result);
+      this._setCached(this.channelPermCache, cacheKey, result, this.maxChannelPermCacheSize);
       return result;
     } catch (err) {
       this.logger?.debug?.('Permission resolution failed', {
@@ -276,7 +285,7 @@ export class PermissionService {
 
   _cacheAndReturnUnknown(cacheKey: string): PermissionResolution {
     const value = this._unknown();
-    this._setCached(this.channelPermCache, cacheKey, value);
+    this._setCached(this.channelPermCache, cacheKey, value, this.maxChannelPermCacheSize);
     return value;
   }
 
@@ -286,7 +295,7 @@ export class PermissionService {
     const cached = this._getCached(this.guildMemberCache, key);
     if (cached) return cached;
     const value = await this.rest.getGuildMember(guildId, userId);
-    this._setCached(this.guildMemberCache, key, value);
+    this._setCached(this.guildMemberCache, key, value, this.maxGuildMemberCacheSize);
     return value;
   }
 
@@ -296,7 +305,7 @@ export class PermissionService {
     const cached = this._getCached(this.guildCache, key);
     if (cached) return cached;
     const value = await this.rest.getGuild(guildId);
-    this._setCached(this.guildCache, key, value);
+    this._setCached(this.guildCache, key, value, this.maxGuildCacheSize);
     return value;
   }
 
@@ -310,11 +319,32 @@ export class PermissionService {
     return entry.value;
   }
 
-  _setCached<T>(map: Map<string, CachedEntry<T>>, key: string, value: T): void {
+  _setCached<T>(map: Map<string, CachedEntry<T>>, key: string, value: T, maxSize: number): void {
+    this._pruneExpiredEntries(map);
+    map.delete(key);
     map.set(key, {
       value,
       expiresAt: Date.now() + this.cacheTtlMs,
     });
+    this._enforceCacheSizeLimit(map, maxSize);
+  }
+
+  _pruneExpiredEntries<T>(map: Map<string, CachedEntry<T>>): void {
+    const now = Date.now();
+    for (const [key, entry] of map.entries()) {
+      if (entry.expiresAt <= now) {
+        map.delete(key);
+      }
+    }
+  }
+
+  _enforceCacheSizeLimit<T>(map: Map<string, CachedEntry<T>>, maxSize: number): void {
+    const safeMaxSize = Math.max(1, Number.parseInt(String(maxSize), 10) || 1);
+    while (map.size > safeMaxSize) {
+      const oldestKey = map.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      map.delete(oldestKey);
+    }
   }
 }
 

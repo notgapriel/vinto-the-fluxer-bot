@@ -530,7 +530,7 @@ export const urlResolverMethods: UrlResolverMethods & ThisType<UrlResolverRuntim
           }).catch(() => null);
 
         if (response?.url && isHttpUrl(response.url)) {
-          this.normalizedInputUrlCache.set(trimmed, {
+          this._setNormalizedInputUrlCacheEntry(trimmed, {
             url: response.url,
             expiresAtMs: Date.now() + SHORT_URL_CACHE_TTL_MS,
           });

@@ -77,6 +77,9 @@ import {
 import type { BivariantCallback, LoggerLike } from '../types/core.ts';
 import type { PipelineProcess, Track, TrackInput } from '../types/domain.ts';
 
+const NORMALIZED_INPUT_URL_CACHE_MAX_SIZE = 500;
+const DEEZER_STREAM_META_CACHE_MAX_SIZE = 1_000;
+
 interface VoiceAdapterLike {
   sendAudio?: (stream: unknown) => Promise<unknown>;
   isStreaming?: boolean;
@@ -421,6 +424,36 @@ export class MusicPlayer extends EventEmitter {
     this._lastYtDlpDiagnostics = null;
     this._lastFfmpegArgs = null;
     this.normalizedInputUrlCache = new Map();
+  }
+
+  _setNormalizedInputUrlCacheEntry(key: string, value: { url: string; expiresAtMs: number }): void {
+    this._pruneExpiredNormalizedInputUrlCacheEntries();
+    this.normalizedInputUrlCache.delete(key);
+    this.normalizedInputUrlCache.set(key, value);
+    while (this.normalizedInputUrlCache.size > NORMALIZED_INPUT_URL_CACHE_MAX_SIZE) {
+      const oldest = this.normalizedInputUrlCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.normalizedInputUrlCache.delete(oldest);
+    }
+  }
+
+  _pruneExpiredNormalizedInputUrlCacheEntries(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.normalizedInputUrlCache.entries()) {
+      if (entry.expiresAtMs <= now) {
+        this.normalizedInputUrlCache.delete(key);
+      }
+    }
+  }
+
+  _setDeezerStreamMeta(trackId: string, meta: { url: string; cipherType: string; format: string | null }): void {
+    this._deezerStreamMetaByTrackId.delete(trackId);
+    this._deezerStreamMetaByTrackId.set(trackId, meta);
+    while (this._deezerStreamMetaByTrackId.size > DEEZER_STREAM_META_CACHE_MAX_SIZE) {
+      const oldest = this._deezerStreamMetaByTrackId.keys().next().value;
+      if (!oldest) break;
+      this._deezerStreamMetaByTrackId.delete(oldest);
+    }
   }
 
   _useRuntimeYtDlpCookiesFile(): void {

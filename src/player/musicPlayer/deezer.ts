@@ -100,9 +100,15 @@ export function parseContentRangeStart(value: unknown) {
 }
 
 export function isRetryableDeezerStreamError(err: unknown) {
-  const typedErr = err && typeof err === 'object' ? err as { code?: unknown; message?: unknown } : null;
+  const typedErr = err && typeof err === 'object'
+    ? err as { code?: unknown; name?: unknown; message?: unknown }
+    : null;
   const code = String(typedErr?.code ?? '').trim().toUpperCase();
-  if (['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT'].includes(code)) {
+  const name = String(typedErr?.name ?? '').trim().toUpperCase();
+  if (['23', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT'].includes(code)) {
+    return true;
+  }
+  if (['ABORTERROR', 'TIMEOUTERROR'].includes(name)) {
     return true;
   }
 
@@ -114,6 +120,9 @@ export function isRetryableDeezerStreamError(err: unknown) {
     || message.includes('body timeout')
     || message.includes('fetch failed')
     || message.includes('premature close')
+    || message.includes('aborted due to timeout')
+    || message.includes('operation was aborted')
+    || message.includes('timed out')
   );
 }
 
