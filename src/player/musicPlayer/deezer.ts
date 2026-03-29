@@ -29,6 +29,8 @@ export const DEEZER_STREAM_RETRY_LIMIT = 8;
 export const DEEZER_STREAM_BASE_BACKOFF_MS = 250;
 export const DEEZER_STREAM_MAX_BACKOFF_MS = 2_000;
 export const DEEZER_STREAM_HIGH_WATER_MARK = 1 << 20;
+export const DEEZER_STREAM_CONNECT_TIMEOUT_MS = 15_000;
+export const DEEZER_STREAM_READ_TIMEOUT_MS = 45_000;
 
 function md5Hex(value: string, encoding: BufferEncoding = 'ascii') {
   const hash = createHash('md5');

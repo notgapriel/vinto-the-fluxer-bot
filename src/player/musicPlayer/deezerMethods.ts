@@ -8,8 +8,10 @@ import {
   DEEZER_MEDIA_QUALITY_MAP,
   DEEZER_SESSION_TOKEN_TTL_MS,
   DEEZER_STREAM_BASE_BACKOFF_MS,
+  DEEZER_STREAM_CONNECT_TIMEOUT_MS,
   DEEZER_STREAM_HIGH_WATER_MARK,
   DEEZER_STREAM_MAX_BACKOFF_MS,
+  DEEZER_STREAM_READ_TIMEOUT_MS,
   DEEZER_STREAM_RETRY_LIMIT,
   isRetryableDeezerStreamError,
   parseContentRangeStart,
@@ -597,11 +599,21 @@ export const deezerMethods: LooseMethodMap = {
       headers.range = `bytes=${safeOffset}-`;
     }
 
-    const response = await fetch(streamUrl, {
-      method: 'GET',
-      headers,
-      signal: AbortSignal.timeout(15_000),
-    }).catch(() => null);
+    const controller = new AbortController();
+    const connectTimeout = setTimeout(() => {
+      controller.abort(new Error('Deezer stream connection timed out.'));
+    }, DEEZER_STREAM_CONNECT_TIMEOUT_MS);
+
+    let response;
+    try {
+      response = await fetch(streamUrl, {
+        method: 'GET',
+        headers,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(connectTimeout);
+    }
 
     if (!response?.ok || !response.body) {
       throw new Error(`Failed to fetch encrypted Deezer stream (${response?.status ?? 'network'})`);
@@ -619,7 +631,28 @@ export const deezerMethods: LooseMethodMap = {
       }
     }
 
-    return response;
+    return { response, controller };
+  },
+
+  async _readDeezerStreamChunkWithTimeout(reader: ReadableStreamDefaultReader<Uint8Array>, controller: AbortController | null) {
+    let timeoutHandle: NodeJS.Timeout | null = null;
+    try {
+      return await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            controller?.abort?.(new Error('Deezer stream body read timed out.'));
+            const timeoutError = new Error('Deezer stream body read timed out.');
+            (timeoutError as Error & { code?: string }).code = 'ETIMEDOUT';
+            reject(timeoutError);
+          }, DEEZER_STREAM_READ_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
   },
 
   _createDeezerResilientReadable(streamUrl: string) {
@@ -628,9 +661,12 @@ export const deezerMethods: LooseMethodMap = {
     let attempts = 0;
     let closed = false;
     let activeReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    let activeResponseController: AbortController | null = null;
 
     const onClose = () => {
       closed = true;
+      activeResponseController?.abort?.();
+      activeResponseController = null;
       const reader = activeReader;
       activeReader = null;
       if (!reader?.cancel) return;
@@ -641,9 +677,9 @@ export const deezerMethods: LooseMethodMap = {
 
     const run = async () => {
       while (!closed) {
-        let response;
+        let connection;
         try {
-          response = await this._openDeezerStreamConnection(streamUrl, offset);
+          connection = await this._openDeezerStreamConnection(streamUrl, offset);
         } catch (err) {
           if (!isRetryableDeezerStreamError(err) || attempts >= DEEZER_STREAM_RETRY_LIMIT) {
             out.destroy(err instanceof Error ? err : new Error(String(err)));
@@ -657,6 +693,8 @@ export const deezerMethods: LooseMethodMap = {
         }
 
         attempts = 0;
+        activeResponseController = connection.controller;
+        const response = connection.response;
         activeReader = response.body?.getReader?.() ?? null;
         if (!activeReader) {
           out.destroy(new Error('Encrypted Deezer response body is not readable.'));
@@ -665,7 +703,7 @@ export const deezerMethods: LooseMethodMap = {
 
         try {
           while (!closed) {
-            const { done, value } = await activeReader.read();
+            const { done, value } = await this._readDeezerStreamChunkWithTimeout(activeReader, activeResponseController);
             if (done) {
               out.end();
               return;
@@ -692,6 +730,7 @@ export const deezerMethods: LooseMethodMap = {
             activeReader?.releaseLock?.();
           } catch {}
           activeReader = null;
+          activeResponseController = null;
         }
       }
     };
