@@ -62,14 +62,19 @@ export function isYtDlpOutputTimeoutError(err: unknown): boolean {
 
 export function isYtDlpExitedBeforeOutputError(err: unknown): boolean {
   const message = errorMessage(err);
-  return message.includes('yt-dlp exited before output');
+  return (
+    message.includes('yt-dlp exited before output')
+    || message.includes('yt-dlp exited before startup grace completed')
+  );
 }
 
 export function isRetryableYtDlpStartupError(err: unknown): boolean {
+  const message = errorMessage(err);
   return (
     isRequestedFormatUnavailableError(err)
     || isYtDlpOutputTimeoutError(err)
     || isYtDlpExitedBeforeOutputError(err)
+    || message.includes('pipe startup failed')
   );
 }
 

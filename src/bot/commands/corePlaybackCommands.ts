@@ -860,6 +860,7 @@ registry.register(createCommand({
       const totalSec = parseDurationToSeconds(current.duration);
       const progressSec = session.player.getProgressSeconds();
       const isRadio = current.source === 'radio-stream';
+      const pendingTracks = session.player.pendingTracks ?? [];
       const fields: EmbedField[] = isRadio
         ? [
             { name: 'Progress', value: buildProgressBar(progressSec, totalSec ?? Number.NaN, 16, { isLive: true }) },
@@ -873,10 +874,12 @@ registry.register(createCommand({
           ]
         : [
             { name: 'Progress', value: buildProgressBar(progressSec, totalSec ?? Number.NaN, 16, { isLive: Boolean(current?.isLive) }) },
-            { name: 'Queued', value: String(session.player.pendingTracks.length), inline: true },
+            { name: 'Loop', value: String(session.player.loopMode ?? 'off'), inline: true },
+            { name: 'Volume', value: `${session.player.volumePercent ?? 100}%`, inline: true },
+            { name: 'Queued', value: String(pendingTracks.length), inline: true },
           ];
 
-      const pendingDurationSec = session.player.pendingTracks.reduce((sum, track) => {
+      const pendingDurationSec = pendingTracks.reduce((sum, track) => {
         const parsed = parseDurationToSeconds(track?.duration);
         return parsed != null ? sum + parsed : sum;
       }, 0);

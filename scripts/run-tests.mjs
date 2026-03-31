@@ -40,7 +40,7 @@ testFiles.sort((a, b) => a.localeCompare(b))
 
 const result = spawnSync(
   process.execPath,
-  ['--import', 'tsx', '--test', ...testFiles],
+  ['--import', 'tsx', '--test', '--test-force-exit', ...testFiles],
   { stdio: 'inherit' }
 )
 
