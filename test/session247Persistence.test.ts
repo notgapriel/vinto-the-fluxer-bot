@@ -808,7 +808,7 @@ test('snapshot flush loop persists updated playback progress for active sessions
       enableSpotifyImport: true,
       enableDeezerImport: true,
       youtubePlaylistResolver: 'ytdlp',
-      sessionSnapshotMinWriteIntervalMs: 0,
+      sessionSnapshotMinWriteIntervalMs: 1_000,
     },
     library,
   });
@@ -816,20 +816,20 @@ test('snapshot flush loop persists updated playback progress for active sessions
   const session = await manager.ensure('919191', null, { voiceChannelId: '232323' });
   session.settings.stayInVoiceEnabled = false;
   session.player.playing = true;
-  session.player.currentTrack = {
+  session.player.queue.current = {
     title: 'Keep Progress',
     url: 'https://example.com/progress',
     duration: '3:00',
     source: 'youtube',
     seekStartSec: 0,
   };
-  session.player.pendingTracks = [];
   session.player.canSeekCurrentTrack = () => true;
   session.player.getProgressSeconds = () => progressSec;
 
   session.snapshot!.dirty = false;
   await manager.flushDirtySnapshots();
   progressSec = 28;
+  session.snapshot!.lastPersistAt = Date.now() - 2_000;
   await manager.flushDirtySnapshots();
 
   assert.equal(snapshots.length, 2);
@@ -1286,6 +1286,7 @@ test('session snapshot restore aborts restored queue on startup playback failure
     ['loop', 'off'],
     ['create', 'Broken Restore Track'],
     ['create', 'Should Not Retry'],
+    ['clear'],
     ['enqueue', ['Broken Restore Track', 'Should Not Retry']],
     ['play'],
     ['clear'],
