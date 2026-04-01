@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { MusicPlayer } from '../src/player/MusicPlayer.ts';
@@ -138,6 +141,90 @@ test('play() increases initial playback timeout for large seek offsets', async (
   await player.play();
 
   assert.equal(startupTimeoutMs, 60_000);
+});
+
+test('play() halts queue drain after repeated startup failures', async () => {
+  const voice = createVoice();
+  const player = new MusicPlayer(voice, {});
+  const attemptedTracks: string[] = [];
+  const queueEmptyEvents: Array<{ reason?: string; droppedTracks?: number }> = [];
+  let trackErrorCount = 0;
+
+  let activeFfmpeg: FfmpegMock | null = null;
+  const emitActiveClose = () => {
+    assert.ok(activeFfmpeg);
+    activeFfmpeg.emit('close', 1, null);
+  };
+  player._startHttpUrlPipeline = async (url: string) => {
+    attemptedTracks.push(url);
+    const ffmpeg = new EventEmitter() as FfmpegMock;
+    ffmpeg.stdout = new PassThrough();
+    ffmpeg.kill = () => {};
+    player.ffmpeg = ffmpeg;
+    activeFfmpeg = ffmpeg;
+  };
+
+  player.on('trackError', () => {
+    trackErrorCount += 1;
+  });
+  player.on('queueEmpty', (event: { reason?: string; droppedTracks?: number }) => {
+    queueEmptyEvents.push(event);
+  });
+
+  player.enqueueResolvedTracks([
+    player._buildTrack({ title: 'Track 1', url: 'https://example.com/1', duration: '03:00', source: 'url', requestedBy: 'u' }),
+    player._buildTrack({ title: 'Track 2', url: 'https://example.com/2', duration: '03:00', source: 'url', requestedBy: 'u' }),
+    player._buildTrack({ title: 'Track 3', url: 'https://example.com/3', duration: '03:00', source: 'url', requestedBy: 'u' }),
+    player._buildTrack({ title: 'Track 4', url: 'https://example.com/4', duration: '03:00', source: 'url', requestedBy: 'u' }),
+  ]);
+
+  const playPromise = player.play();
+  await new Promise((resolve) => setImmediate(resolve));
+  emitActiveClose();
+  await new Promise((resolve) => setImmediate(resolve));
+  emitActiveClose();
+  await new Promise((resolve) => setImmediate(resolve));
+  emitActiveClose();
+  await playPromise;
+
+  assert.equal(trackErrorCount, 3);
+  assert.deepEqual(attemptedTracks, [
+    'https://example.com/1',
+    'https://example.com/2',
+    'https://example.com/3',
+  ]);
+  assert.equal(queueEmptyEvents.at(-1)?.reason, 'startup_error_limit');
+  assert.equal(queueEmptyEvents.at(-1)?.droppedTracks, 1);
+  assert.equal(player.pendingTracks.length, 0);
+});
+
+test('stop() removes runtime yt-dlp cookies file and allows recreating it later', () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'fluxer-cookies-test-'));
+  const sourcePath = join(tempDir, 'cookies.txt');
+  writeFileSync(sourcePath, '# Netscape HTTP Cookie File\n');
+
+  try {
+    const player = new MusicPlayer(createVoice(), { ytdlpCookiesFile: sourcePath, logger: null });
+    const runtimePath = player.ytdlpCookiesFile;
+
+    assert.ok(runtimePath);
+    assert.notEqual(runtimePath, sourcePath);
+    assert.equal(existsSync(String(runtimePath)), true);
+
+    player.stop();
+
+    assert.equal(existsSync(String(runtimePath)), false);
+    assert.equal(player.ytdlpCookiesFile, sourcePath);
+
+    const recreatedRuntimePath = player._getActiveYtDlpCookiesFile();
+    assert.ok(recreatedRuntimePath);
+    assert.notEqual(recreatedRuntimePath, sourcePath);
+    assert.equal(existsSync(String(recreatedRuntimePath)), true);
+
+    player.stop();
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test('seekTo rejects positions at or beyond the current track length', () => {

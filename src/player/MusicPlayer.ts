@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import type { Readable, Writable } from 'node:stream';
-import { copyFileSync, existsSync } from 'node:fs';
+import { copyFileSync, existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -79,6 +79,7 @@ import type { PipelineProcess, Track, TrackInput } from '../types/domain.ts';
 
 const NORMALIZED_INPUT_URL_CACHE_MAX_SIZE = 500;
 const DEEZER_STREAM_META_CACHE_MAX_SIZE = 1_000;
+const STARTUP_FAILURE_STREAK_LIMIT = 3;
 
 interface VoiceAdapterLike {
   sendAudio?: (stream: unknown) => Promise<unknown>;
@@ -271,6 +272,8 @@ export class MusicPlayer extends EventEmitter {
   ffmpegBin: string;
   ytdlpBin: string | null;
   ytdlpCookiesFile: string | null;
+  ytdlpSourceCookiesFile: string | null;
+  ytdlpRuntimeCookiesFile: string | null;
   ytdlpCookiesFromBrowser: string | null;
   ytdlpYoutubeClient: string | null;
   ytdlpExtraArgs: string[];
@@ -336,6 +339,7 @@ export class MusicPlayer extends EventEmitter {
   _lastYtDlpDiagnostics: Record<string, unknown> | null;
   _lastFfmpegArgs: string[] | null;
   normalizedInputUrlCache: Map<string, { url: string; expiresAtMs: number }>;
+  consecutiveStartupFailures: number;
 
   constructor(voice: VoiceAdapterLike, options: MusicPlayerOptions = {}) {
     super();
@@ -345,6 +349,8 @@ export class MusicPlayer extends EventEmitter {
     this.ffmpegBin = options.ffmpegBin || process.env.FFMPEG_BIN || String(ffmpegPath ?? '') || 'ffmpeg';
     this.ytdlpBin = options.ytdlpBin || process.env.YTDLP_BIN || null;
     this.ytdlpCookiesFile = options.ytdlpCookiesFile || process.env.YTDLP_COOKIES_FILE || null;
+    this.ytdlpSourceCookiesFile = this.ytdlpCookiesFile;
+    this.ytdlpRuntimeCookiesFile = null;
     this.ytdlpCookiesFromBrowser = options.ytdlpCookiesFromBrowser || process.env.YTDLP_COOKIES_FROM_BROWSER || null;
     const configuredYtdlpClient = options.ytdlpYoutubeClient ?? process.env.YTDLP_YOUTUBE_CLIENT ?? null;
     this.ytdlpYoutubeClient = String(configuredYtdlpClient ?? '').trim() || null;
@@ -425,6 +431,7 @@ export class MusicPlayer extends EventEmitter {
     this._lastYtDlpDiagnostics = null;
     this._lastFfmpegArgs = null;
     this.normalizedInputUrlCache = new Map();
+    this.consecutiveStartupFailures = 0;
   }
 
   _setNormalizedInputUrlCacheEntry(key: string, value: { url: string; expiresAtMs: number }): void {
@@ -457,10 +464,31 @@ export class MusicPlayer extends EventEmitter {
     }
   }
 
+  _getActiveYtDlpCookiesFile(): string | null {
+    this._useRuntimeYtDlpCookiesFile();
+    return this.ytdlpCookiesFile ? String(this.ytdlpCookiesFile).trim() || null : null;
+  }
+
+  _cleanupRuntimeYtDlpCookiesFile(): void {
+    const runtimePath = String(this.ytdlpRuntimeCookiesFile ?? '').trim();
+    this.ytdlpRuntimeCookiesFile = null;
+    this.ytdlpCookiesFile = this.ytdlpSourceCookiesFile;
+
+    if (!runtimePath) return;
+    try {
+      unlinkSync(runtimePath);
+    } catch {}
+  }
+
   _useRuntimeYtDlpCookiesFile(): void {
     if (!this.ytdlpCookiesFile || this.ytdlpCookiesFromBrowser) return;
 
-    const sourcePath = String(this.ytdlpCookiesFile).trim();
+    if (this.ytdlpRuntimeCookiesFile && existsSync(this.ytdlpRuntimeCookiesFile)) {
+      this.ytdlpCookiesFile = this.ytdlpRuntimeCookiesFile;
+      return;
+    }
+
+    const sourcePath = String(this.ytdlpSourceCookiesFile ?? this.ytdlpCookiesFile).trim();
     if (!sourcePath) return;
 
     if (!existsSync(sourcePath)) {
@@ -475,13 +503,17 @@ export class MusicPlayer extends EventEmitter {
       `${basename(sourcePath)}.runtime-${process.pid}-${Math.random().toString(36).slice(2, 10)}`
     );
     try {
+      this._cleanupRuntimeYtDlpCookiesFile();
       copyFileSync(sourcePath, runtimePath);
       this.ytdlpCookiesFile = runtimePath;
+      this.ytdlpRuntimeCookiesFile = runtimePath;
       this.logger?.info?.('Using runtime copy of yt-dlp cookies file to avoid mutating source cookies', {
         sourcePath,
         runtimePath,
       });
     } catch (err) {
+      this.ytdlpRuntimeCookiesFile = null;
+      this.ytdlpCookiesFile = sourcePath;
       this.logger?.warn?.('Failed to prepare runtime yt-dlp cookies file copy, using source file directly', {
         sourcePath,
         error: err instanceof Error ? err.message : String(err),
@@ -621,6 +653,7 @@ export class MusicPlayer extends EventEmitter {
 
     const track = this.queue.next();
     if (!track) {
+      this._cleanupRuntimeYtDlpCookiesFile();
       this._stopVoiceStream();
       this.emit('queueEmpty');
       return;
@@ -633,6 +666,7 @@ export class MusicPlayer extends EventEmitter {
     this.skipRequested = false;
     let ffmpegStartupStderr = '';
     let onFfmpegStartupStderr = null;
+    let ffmpegProc = null;
 
     try {
       this._ensurePlaybackStartupActive(startupToken);
@@ -661,7 +695,7 @@ export class MusicPlayer extends EventEmitter {
       }
       this._ensurePlaybackStartupActive(startupToken);
 
-      const ffmpegProc = this.ffmpeg;
+      ffmpegProc = this.ffmpeg;
       if (!ffmpegProc?.stdout?.pipe || !ffmpegProc?.once) {
         throw new Error('Playback pipeline did not initialize ffmpeg output.');
       }
@@ -696,6 +730,7 @@ export class MusicPlayer extends EventEmitter {
       );
       this._ensurePlaybackStartupActive(startupToken);
       playbackStarted = true;
+      this.consecutiveStartupFailures = 0;
       this._startPlaybackClock(track.seekStartSec ?? 0);
       this.lastKnownTrack = track;
       this.lastKnownTrackAtMs = Date.now();
@@ -703,10 +738,19 @@ export class MusicPlayer extends EventEmitter {
       this.logger?.info?.('Playback started', { title: track.title, url: track.url, seek: track.seekStartSec ?? 0 });
     } catch (err) {
       const startupAborted = this._isPlaybackStartupAbortedError(err);
+      let normalizedMessage = '';
       if (!startupAborted) {
         const normalized = this._normalizePlaybackError(this._withStartupStderr(err, ffmpegStartupStderr));
+        normalizedMessage = String(normalized?.message ?? '').toLowerCase();
         this.emit('trackError', { track, error: normalized });
         this.logger?.error?.('Playback setup failed', { track: track.title, error: normalized.message });
+        const isStartupFloodCandidate = (
+          normalizedMessage.includes('did not produce audio output in time')
+          || normalizedMessage.includes('before audio output')
+        );
+        this.consecutiveStartupFailures = isStartupFloodCandidate
+          ? this.consecutiveStartupFailures + 1
+          : 0;
       } else {
         this.logger?.debug?.('Playback startup aborted before first audio chunk', {
           title: track?.title ?? null,
@@ -727,11 +771,33 @@ export class MusicPlayer extends EventEmitter {
         this.queue.addFront(pendingSeekTrack);
       }
 
+      if (
+        !startupAborted
+        && this.queue.pendingSize > 0
+        && this.consecutiveStartupFailures >= STARTUP_FAILURE_STREAK_LIMIT
+      ) {
+        const droppedTracks = this.clearQueue();
+        this._cleanupRuntimeYtDlpCookiesFile();
+        this._stopVoiceStream();
+        this.logger?.warn?.('Halting queue after repeated playback startup failures', {
+          failedTrack: track?.title ?? null,
+          consecutiveStartupFailures: this.consecutiveStartupFailures,
+          droppedTracks,
+        });
+        this.emit('queueEmpty', {
+          reason: 'startup_error_limit',
+          consecutiveStartupFailures: this.consecutiveStartupFailures,
+          droppedTracks,
+        });
+        return;
+      }
+
       if (this.queue.pendingSize > 0) {
         await this.play();
         return;
       }
 
+      this._cleanupRuntimeYtDlpCookiesFile();
       this._stopVoiceStream();
       if (!startupAborted) {
         this.emit('queueEmpty', { reason: 'startup_error' });
@@ -743,7 +809,7 @@ export class MusicPlayer extends EventEmitter {
       }
     } finally {
       if (onFfmpegStartupStderr) {
-        this.ffmpeg?.stderr?.off?.('data', onFfmpegStartupStderr);
+        ffmpegProc?.stderr?.off?.('data', onFfmpegStartupStderr);
       }
     }
   }

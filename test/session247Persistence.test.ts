@@ -816,6 +816,7 @@ test('snapshot flush loop persists updated playback progress for active sessions
   const session = await manager.ensure('919191', null, { voiceChannelId: '232323' });
   session.settings.stayInVoiceEnabled = false;
   session.player.playing = true;
+  assert.ok(session.player.queue);
   session.player.queue.current = {
     title: 'Keep Progress',
     url: 'https://example.com/progress',

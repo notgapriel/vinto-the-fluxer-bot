@@ -325,8 +325,9 @@ export const resolverMethods: LooseMethodMap = {
       if (clientArg) {
         args.push('--extractor-args', `youtube:player_client=${clientArg}`);
       }
-      if (this.ytdlpCookiesFile) {
-        args.push('--cookies', this.ytdlpCookiesFile);
+      const activeCookiesFile = this._getActiveYtDlpCookiesFile?.() ?? null;
+      if (activeCookiesFile) {
+        args.push('--cookies', activeCookiesFile);
       }
       if (this.ytdlpCookiesFromBrowser) {
         args.push('--cookies-from-browser', this.ytdlpCookiesFromBrowser);
@@ -514,8 +515,9 @@ export const resolverMethods: LooseMethodMap = {
       if (clientArg) {
         args.push('--extractor-args', `youtube:player_client=${clientArg}`);
       }
-      if (this.ytdlpCookiesFile) {
-        args.push('--cookies', this.ytdlpCookiesFile);
+      const activeCookiesFile = this._getActiveYtDlpCookiesFile?.() ?? null;
+      if (activeCookiesFile) {
+        args.push('--cookies', activeCookiesFile);
       }
       if (this.ytdlpCookiesFromBrowser) {
         args.push('--cookies-from-browser', this.ytdlpCookiesFromBrowser);

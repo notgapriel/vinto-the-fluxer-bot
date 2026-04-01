@@ -396,8 +396,9 @@ export const pipelineMethods: LooseMethodMap = {
     if (clientArg) {
       commonArgs.push('--extractor-args', `youtube:player_client=${clientArg}`);
     }
-    if (this.ytdlpCookiesFile) {
-      commonArgs.push('--cookies', this.ytdlpCookiesFile);
+    const activeCookiesFile = this._getActiveYtDlpCookiesFile?.() ?? null;
+    if (activeCookiesFile) {
+      commonArgs.push('--cookies', activeCookiesFile);
     }
     if (this.ytdlpCookiesFromBrowser) {
       commonArgs.push('--cookies-from-browser', this.ytdlpCookiesFromBrowser);
@@ -488,8 +489,9 @@ export const pipelineMethods: LooseMethodMap = {
     if (this.ytdlpYoutubeClient) {
       commonArgs.push('--extractor-args', `youtube:player_client=${this.ytdlpYoutubeClient}`);
     }
-    if (this.ytdlpCookiesFile) {
-      commonArgs.push('--cookies', this.ytdlpCookiesFile);
+    const activeCookiesFile = this._getActiveYtDlpCookiesFile?.() ?? null;
+    if (activeCookiesFile) {
+      commonArgs.push('--cookies', activeCookiesFile);
     }
     if (this.ytdlpCookiesFromBrowser) {
       commonArgs.push('--cookies-from-browser', this.ytdlpCookiesFromBrowser);
@@ -633,8 +635,9 @@ export const pipelineMethods: LooseMethodMap = {
     if (clientArg) {
       args.push('--extractor-args', `youtube:player_client=${clientArg}`);
     }
-    if (this.ytdlpCookiesFile) {
-      args.push('--cookies', this.ytdlpCookiesFile);
+    const activeCookiesFile = this._getActiveYtDlpCookiesFile?.() ?? null;
+    if (activeCookiesFile) {
+      args.push('--cookies', activeCookiesFile);
     }
     if (this.ytdlpCookiesFromBrowser) {
       args.push('--cookies-from-browser', this.ytdlpCookiesFromBrowser);

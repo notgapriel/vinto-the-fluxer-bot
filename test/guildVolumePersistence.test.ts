@@ -90,6 +90,63 @@ test('volume command only changes the active session volume', async () => {
   assert.deepEqual(dirty, [['voice-1', true]]);
 });
 
+test('volume change restarts current processing when playback started without a live processor', () => {
+  const refreshCalls: number[] = [];
+  const manager = new SessionManager({
+    gateway: {
+      joinVoice() {},
+      leaveVoice() {},
+      on() {},
+      off() {},
+    },
+    config: {
+      sessionIdleMs: 10_000,
+      defaultDedupeEnabled: false,
+      defaultStayInVoiceEnabled: false,
+      defaultVolumePercent: 100,
+      minVolumePercent: 0,
+      maxVolumePercent: 200,
+      voteSkipRatio: 0.5,
+      voteSkipMinVotes: 2,
+      voiceMaxBitrate: 192000,
+      maxQueueSize: 100,
+      maxPlaylistTracks: 25,
+      enableYtSearch: true,
+      enableYtPlayback: true,
+      enableSpotifyImport: true,
+      enableDeezerImport: true,
+      youtubePlaylistResolver: 'ytdlp',
+    },
+    logger: undefined,
+    voiceStateStore: null,
+    botUserId: null,
+  });
+
+  return manager.ensure('guild-1').then(async (session) => {
+    const player = session.player as typeof session.player & {
+      refreshCurrentTrackProcessing: () => boolean;
+      liveAudioProcessor?: unknown;
+      setVolumePercent: (value: number) => number;
+    };
+    manager._clearIdleTimer(session);
+    player.playing = true;
+    player.refreshCurrentTrackProcessing = () => {
+      refreshCalls.push(1);
+      return true;
+    };
+
+    assert.equal(player.volumePercent, 100);
+    assert.equal(player.liveAudioProcessor ?? null, null);
+
+    player.setVolumePercent(5);
+
+    assert.equal(player.volumePercent, 5);
+    assert.equal(refreshCalls.length, 1);
+
+    await manager.destroy('guild-1', 'test');
+  });
+});
+
 test('volume default command persists guild default volume', async () => {
   const volumeDefault = buildVolumeDefaultCommand();
   const executeVolumeDefault = volumeDefault?.execute;

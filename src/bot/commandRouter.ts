@@ -607,9 +607,10 @@ export class CommandRouter {
         });
         return;
       }
-      if (reason === 'startup_error') {
+      if (reason === 'startup_error' || reason === 'startup_error_limit') {
         this.logger?.debug?.('Skipping queueEmpty announcement for startup playback failure', {
           guildId: session?.guildId ?? null,
+          reason,
         });
         return;
       }

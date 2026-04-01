@@ -36,6 +36,9 @@ type PlaybackStateMethods = {
 };
 type PlaybackStateRuntime = MusicPlayer & PlaybackStateMethods & {
   _syncLiveAudioProcessor: () => void;
+  _shouldUseLiveAudioProcessor: () => boolean;
+  refreshCurrentTrackProcessing: () => boolean;
+  liveAudioProcessor?: unknown;
 };
 
 export const playbackStateMethods: PlaybackStateMethods & ThisType<PlaybackStateRuntime> = {
@@ -86,8 +89,12 @@ export const playbackStateMethods: PlaybackStateMethods & ThisType<PlaybackState
       throw new ValidationError(`Volume must be between ${this.minVolumePercent} and ${this.maxVolumePercent}.`);
     }
 
+    const hadLiveProcessor = Boolean(this.liveAudioProcessor);
     this.volumePercent = next;
     this._syncLiveAudioProcessor();
+    if (this.playing && !hadLiveProcessor && this._shouldUseLiveAudioProcessor()) {
+      this.refreshCurrentTrackProcessing();
+    }
     return this.volumePercent;
   },
 

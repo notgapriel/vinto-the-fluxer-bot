@@ -28,8 +28,9 @@ type QueueLifecycleRuntime = MusicPlayer & QueueLifecycleMethods & {
 
 export const queueLifecycleMethods: QueueLifecycleMethods & ThisType<QueueLifecycleRuntime> = {
   clearQueue(this: QueueLifecycleRuntime) {
+    const removed = this.queue.pendingSize;
     this.queue.tracks = [];
-    return 0;
+    return removed;
   },
 
   shuffleQueue(this: QueueLifecycleRuntime) {
@@ -207,9 +208,11 @@ export const queueLifecycleMethods: QueueLifecycleMethods & ThisType<QueueLifecy
   stop(this: QueueLifecycleRuntime) {
     this._invalidatePlaybackStartup();
     this.skipRequested = true;
+    this.consecutiveStartupFailures = 0;
     this.pendingSeekTrack = null;
     this.queue.clear();
     this._cleanupProcesses();
+    this._cleanupRuntimeYtDlpCookiesFile?.();
     this._stopVoiceStream();
     this.playing = false;
     this.paused = false;
@@ -292,6 +295,8 @@ export const queueLifecycleMethods: QueueLifecycleMethods & ThisType<QueueLifecy
       return;
     }
 
+    this.consecutiveStartupFailures = 0;
+    this._cleanupRuntimeYtDlpCookiesFile?.();
     this._stopVoiceStream();
     this.emit('queueEmpty');
   },
