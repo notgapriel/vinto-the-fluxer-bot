@@ -232,6 +232,59 @@ test('idle timeout ignores stale timer from replaced session instance', async ()
   assert.equal(destroyCalls, 0);
 });
 
+test('session memory telemetry reports session lifecycle counters', () => {
+  const manager = createManager();
+  const session = {
+    guildId: 'guild-telemetry',
+    connection: {
+      channelId: 'voice-telemetry',
+      connected: true,
+    },
+    player: {
+      playing: true,
+      currentTrack: { id: 'track-1' },
+      pendingTracks: [{ id: 'queued-1' }, { id: 'queued-2' }],
+      queue: {
+        pendingSize: 0,
+      },
+      emit() {},
+    },
+    settings: {
+      stayInVoiceEnabled: false,
+    },
+    idleTimer: {},
+    snapshot: {
+      dirty: true,
+      lastPersistAt: 0,
+      inFlight: false,
+    },
+    diagnostics: {
+      timer: {},
+      inFlight: false,
+    },
+  };
+
+  manager.sessions.set('guild-telemetry', session as unknown as Parameters<typeof manager.sessions.set>[1]);
+  manager.playerSessionListeners.set('guild-telemetry', {
+    tracksAdded() {},
+    trackStart() {},
+    trackEnd() {},
+    trackError() {},
+    queueEmpty() {},
+  });
+
+  const telemetry = manager.getMemoryTelemetry();
+
+  assert.equal(telemetry.sessionsTotal, 1);
+  assert.equal(telemetry.voiceConnectionsConnected, 1);
+  assert.equal(telemetry.playersPlaying, 1);
+  assert.equal(telemetry.snapshotDirty, 1);
+  assert.equal(telemetry.diagnosticsActive, 1);
+  assert.equal(telemetry.idleTimersActive, 1);
+  assert.equal(telemetry.playerListenerEntries, 1);
+  assert.equal(telemetry.pendingTracksTotal, 2);
+});
+
 test('queueEmpty is handled when only stream tail is active', async () => {
   const manager = createManager({
     config: {
