@@ -1,4 +1,7 @@
 import dns from 'node:dns';
+import { mkdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { writeHeapSnapshot } from 'node:v8';
 
 import { loadConfig } from '../config.ts';
 import { createLogger } from '../core/logger.ts';
@@ -47,6 +50,10 @@ type GatewayPresence = {
   afk: boolean;
   custom_status: { text: string };
 };
+
+function toMegabytes(bytes: number): number {
+  return Math.round(Number(bytes ?? 0) / 1024 / 1024);
+}
 
 function buildGatewayPresence(statusText: string | null | undefined): GatewayPresence {
   return {
@@ -104,6 +111,7 @@ export async function startApp() {
   let shuttingDown = false;
   let unhealthySince = 0;
   let unhealthyExitHandle: NodeJS.Timeout | null = null;
+  let memoryTelemetryHandle: NodeJS.Timeout | null = null;
 
   (dns as DnsWithDefaultOrder).setDefaultResultOrder?.(config.dnsResultOrder);
   logger.info('DNS resolution order configured', { order: config.dnsResultOrder });
@@ -257,7 +265,70 @@ export async function startApp() {
       gatewayConnected = connected;
     },
   });
-  const unbindSessionMetrics = bindSessionMetrics(sessions, metricSet);
+  const unbindSessionMetrics = bindSessionMetrics(sessions, metricSet, {
+    telemetryIntervalMs: config.memoryTelemetryIntervalMs,
+  });
+  const memoryLogger = logger.child('memory');
+  const logMemoryTelemetry = (reason: string) => {
+    const telemetry = sessions.getMemoryTelemetry();
+    memoryLogger.info('Runtime memory telemetry', {
+      reason,
+      sessionsTotal: telemetry.sessionsTotal,
+      voiceConnectionsConnected: telemetry.voiceConnectionsConnected,
+      playersPlaying: telemetry.playersPlaying,
+      snapshotDirty: telemetry.snapshotDirty,
+      diagnosticsActive: telemetry.diagnosticsActive,
+      idleTimersActive: telemetry.idleTimersActive,
+      playerListenerEntries: telemetry.playerListenerEntries,
+      pendingTracksTotal: telemetry.pendingTracksTotal,
+      heapUsedMb: toMegabytes(telemetry.memory.heapUsedBytes),
+      heapTotalMb: toMegabytes(telemetry.memory.heapTotalBytes),
+      rssMb: toMegabytes(telemetry.memory.rssBytes),
+      externalMb: toMegabytes(telemetry.memory.externalBytes),
+      arrayBuffersMb: toMegabytes(telemetry.memory.arrayBuffersBytes),
+    });
+  };
+  if (config.memoryTelemetryLogIntervalMs > 0) {
+    memoryTelemetryHandle = setInterval(() => {
+      logMemoryTelemetry('interval');
+    }, config.memoryTelemetryLogIntervalMs);
+    memoryTelemetryHandle.unref?.();
+  }
+
+  const writeHeapSnapshotOnSignal = (reason: string) => {
+    const snapshotDir = resolve(config.heapSnapshotDir || '.heap-snapshots');
+    mkdirSync(snapshotDir, { recursive: true });
+    const safeReason = String(reason ?? 'manual').replace(/[^a-z0-9_-]+/gi, '-').toLowerCase() || 'manual';
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePath = join(snapshotDir, `heap-${safeReason}-${process.pid}-${timestamp}.heapsnapshot`);
+    const writtenPath = writeHeapSnapshot(filePath);
+    const telemetry = sessions.getMemoryTelemetry();
+
+    memoryLogger.warn('Heap snapshot written', {
+      reason: safeReason,
+      path: writtenPath,
+      sessionsTotal: telemetry.sessionsTotal,
+      heapUsedMb: toMegabytes(telemetry.memory.heapUsedBytes),
+      rssMb: toMegabytes(telemetry.memory.rssBytes),
+    });
+  };
+  const heapSnapshotSignalHandler = () => {
+    try {
+      writeHeapSnapshotOnSignal('sigusr2');
+    } catch (err) {
+      memoryLogger.error('Failed to write heap snapshot', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+  const heapSnapshotSignalEnabled = config.heapSnapshotSignalEnabled && process.platform !== 'win32';
+  if (heapSnapshotSignalEnabled) {
+    process.on('SIGUSR2', heapSnapshotSignalHandler);
+    memoryLogger.info('Heap snapshot signal handler enabled', {
+      signal: 'SIGUSR2',
+      dir: resolve(config.heapSnapshotDir || '.heap-snapshots'),
+    });
+  }
 
   const lyrics = new LyricsService(logger.child('lyrics'));
   const me = await verifyApiConnectivity({ config, rest: connectivityRest, logger });
@@ -337,6 +408,16 @@ export async function startApp() {
       shuttingDown,
       sessions: sessions.sessions.size,
       uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+      memory: (() => {
+        const telemetry = sessions.getMemoryTelemetry();
+        return {
+          heapUsedMb: toMegabytes(telemetry.memory.heapUsedBytes),
+          heapTotalMb: toMegabytes(telemetry.memory.heapTotalBytes),
+          rssMb: toMegabytes(telemetry.memory.rssBytes),
+          externalMb: toMegabytes(telemetry.memory.externalBytes),
+          arrayBuffersMb: toMegabytes(telemetry.memory.arrayBuffersBytes),
+        };
+      })(),
     }),
   });
   await monitoringServer.start().catch((err) => {
@@ -430,6 +511,13 @@ export async function startApp() {
     if (unhealthyExitHandle) {
       clearInterval(unhealthyExitHandle);
       unhealthyExitHandle = null;
+    }
+    if (memoryTelemetryHandle) {
+      clearInterval(memoryTelemetryHandle);
+      memoryTelemetryHandle = null;
+    }
+    if (heapSnapshotSignalEnabled) {
+      process.off('SIGUSR2', heapSnapshotSignalHandler);
     }
 
     gateway.disconnect();

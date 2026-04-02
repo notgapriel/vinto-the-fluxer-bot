@@ -194,6 +194,10 @@ export interface SessionManagerConfigLike extends Partial<AppConfig> {
   voteSkipRatio?: number;
   voteSkipMinVotes?: number;
   sessionIdleMs?: number;
+  memoryTelemetryIntervalMs?: number;
+  memoryTelemetryLogIntervalMs?: number;
+  heapSnapshotSignalEnabled?: boolean;
+  heapSnapshotDir?: string;
 }
 
 export interface SessionManagerOptions {

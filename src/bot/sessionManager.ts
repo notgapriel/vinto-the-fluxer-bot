@@ -52,6 +52,36 @@ type PlayerSessionListeners = {
   queueEmpty: (...args: unknown[]) => void;
 };
 
+type ProcessMemoryTelemetry = {
+  rssBytes: number;
+  heapTotalBytes: number;
+  heapUsedBytes: number;
+  externalBytes: number;
+  arrayBuffersBytes: number;
+};
+type SessionManagerMemoryTelemetry = {
+  memory: ProcessMemoryTelemetry;
+  sessionsTotal: number;
+  voiceConnectionsConnected: number;
+  playersPlaying: number;
+  snapshotDirty: number;
+  diagnosticsActive: number;
+  idleTimersActive: number;
+  playerListenerEntries: number;
+  pendingTracksTotal: number;
+};
+
+function readProcessMemoryTelemetry(): ProcessMemoryTelemetry {
+  const usage = process.memoryUsage();
+  return {
+    rssBytes: usage.rss,
+    heapTotalBytes: usage.heapTotal,
+    heapUsedBytes: usage.heapUsed,
+    externalBytes: usage.external,
+    arrayBuffersBytes: usage.arrayBuffers,
+  };
+}
+
 export class SessionManager extends EventEmitter {
   [key: string]: unknown;
   declare _startSnapshotFlushLoop: () => void;
@@ -117,6 +147,42 @@ export class SessionManager extends EventEmitter {
     this.snapshotFlushHandle = null;
     this.playerSessionListeners = new Map();
     this._startSnapshotFlushLoop();
+  }
+
+  getMemoryTelemetry(): SessionManagerMemoryTelemetry {
+    let voiceConnectionsConnected = 0;
+    let playersPlaying = 0;
+    let snapshotDirty = 0;
+    let diagnosticsActive = 0;
+    let idleTimersActive = 0;
+    let pendingTracksTotal = 0;
+
+    for (const session of this.sessions.values()) {
+      if (session?.connection?.connected) voiceConnectionsConnected += 1;
+      if (session?.player?.playing) playersPlaying += 1;
+      if (session?.snapshot?.dirty) snapshotDirty += 1;
+      if (session?.diagnostics?.timer) diagnosticsActive += 1;
+      if (session?.idleTimer) idleTimersActive += 1;
+
+      const queuePendingSize = Number.parseInt(String(session?.player?.queue?.pendingSize ?? ''), 10);
+      if (Number.isFinite(queuePendingSize) && queuePendingSize > 0) {
+        pendingTracksTotal += queuePendingSize;
+      } else if (Array.isArray(session?.player?.pendingTracks)) {
+        pendingTracksTotal += session.player.pendingTracks.length;
+      }
+    }
+
+    return {
+      memory: readProcessMemoryTelemetry(),
+      sessionsTotal: this.sessions.size,
+      voiceConnectionsConnected,
+      playersPlaying,
+      snapshotDirty,
+      diagnosticsActive,
+      idleTimersActive,
+      playerListenerEntries: this.playerSessionListeners.size,
+      pendingTracksTotal,
+    };
   }
 
   _isSessionRestartRecoverable(session: Session | null | undefined): boolean {

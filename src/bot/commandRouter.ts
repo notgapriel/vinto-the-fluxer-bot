@@ -300,7 +300,7 @@ export class CommandRouter {
 
     const command = this.registry.resolve(parsed.name);
     if (!command) {
-      this.metrics?.commandsTotal?.inc?.(1, { command: parsed.name.toLowerCase(), outcome: 'unknown' });
+      this.metrics?.commandsTotal?.inc?.(1, { command: 'unknown', outcome: 'unknown' });
       return;
     }
 

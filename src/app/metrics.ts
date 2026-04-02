@@ -5,6 +5,16 @@ type GatewayMetricOptions = {
 };
 
 type AppMetricSet = ReturnType<typeof createAppMetrics>;
+type SessionMemoryTelemetry = {
+  sessionsTotal: number;
+  voiceConnectionsConnected: number;
+  playersPlaying: number;
+  snapshotDirty: number;
+  diagnosticsActive: number;
+  idleTimersActive: number;
+  playerListenerEntries: number;
+  pendingTracksTotal: number;
+};
 type GatewayLike = {
   on: (event: string, listener: BivariantCallback<unknown[], void>) => void;
   off: (event: string, listener: BivariantCallback<unknown[], void>) => void;
@@ -14,6 +24,10 @@ type SessionsLike = {
   sessions: Map<string, unknown>;
   on: (event: string, listener: BivariantCallback<unknown[], void>) => void;
   off: (event: string, listener: BivariantCallback<unknown[], void>) => void;
+  getMemoryTelemetry?: () => SessionMemoryTelemetry;
+};
+type SessionMetricOptions = {
+  telemetryIntervalMs?: number;
 };
 
 export function createAppMetrics() {
@@ -34,6 +48,18 @@ export function createAppMetrics() {
     mongoConnected: registry.gauge('mongo_connected', 'MongoDB connection health (1=reachable)'),
     mongoPingLatencyMs: registry.gauge('mongo_ping_latency_ms', 'Latest MongoDB ping latency in milliseconds'),
     mongoPingFailuresTotal: registry.counter('mongo_ping_failures_total', 'MongoDB ping failures'),
+    processHeapUsedBytes: registry.gauge('process_heap_used_bytes', 'Process heap currently used in bytes'),
+    processHeapTotalBytes: registry.gauge('process_heap_total_bytes', 'Process heap currently allocated in bytes'),
+    processRssBytes: registry.gauge('process_rss_bytes', 'Process RSS in bytes'),
+    processExternalBytes: registry.gauge('process_external_bytes', 'Process external memory in bytes'),
+    processArrayBuffersBytes: registry.gauge('process_array_buffers_bytes', 'Process array buffer memory in bytes'),
+    sessionsVoiceConnected: registry.gauge('sessions_voice_connected', 'Sessions with an active voice connection'),
+    sessionsPlaying: registry.gauge('sessions_playing', 'Sessions currently playing audio'),
+    sessionsSnapshotDirty: registry.gauge('sessions_snapshot_dirty', 'Sessions with dirty snapshots pending persistence'),
+    sessionsDiagnosticsActive: registry.gauge('sessions_diagnostics_active', 'Sessions with playback diagnostics timers running'),
+    sessionsIdleTimersActive: registry.gauge('sessions_idle_timers_active', 'Sessions currently holding idle timers'),
+    sessionPlayerListenerEntries: registry.gauge('session_player_listener_entries', 'Tracked player listener sets in SessionManager'),
+    sessionPendingTracks: registry.gauge('session_pending_tracks', 'Total pending tracks across all sessions'),
   };
 }
 
@@ -77,8 +103,21 @@ export function bindGatewayMetrics(gateway: GatewayLike, metricSet: AppMetricSet
   };
 }
 
-export function bindSessionMetrics(sessions: SessionsLike, metricSet: AppMetricSet) {
+export function bindSessionMetrics(sessions: SessionsLike, metricSet: AppMetricSet, options: SessionMetricOptions = {}) {
+  const telemetryIntervalMs = Math.max(1_000, Number.parseInt(String(options.telemetryIntervalMs ?? 5_000), 10) || 5_000);
   metricSet.sessionsActive.set(0);
+  metricSet.sessionsVoiceConnected.set(0);
+  metricSet.sessionsPlaying.set(0);
+  metricSet.sessionsSnapshotDirty.set(0);
+  metricSet.sessionsDiagnosticsActive.set(0);
+  metricSet.sessionsIdleTimersActive.set(0);
+  metricSet.sessionPlayerListenerEntries.set(0);
+  metricSet.sessionPendingTracks.set(0);
+  metricSet.processHeapUsedBytes.set(0);
+  metricSet.processHeapTotalBytes.set(0);
+  metricSet.processRssBytes.set(0);
+  metricSet.processExternalBytes.set(0);
+  metricSet.processArrayBuffersBytes.set(0);
 
   const onTrackStart = () => {
     metricSet.tracksStarted.inc(1);
@@ -90,15 +129,37 @@ export function bindSessionMetrics(sessions: SessionsLike, metricSet: AppMetricS
   const onDestroyed = () => {
     metricSet.sessionsActive.set(sessions.sessions.size);
   };
+  const publishTelemetry = () => {
+    metricSet.sessionsActive.set(sessions.sessions.size);
+
+    const memory = process.memoryUsage();
+    metricSet.processHeapUsedBytes.set(memory.heapUsed);
+    metricSet.processHeapTotalBytes.set(memory.heapTotal);
+    metricSet.processRssBytes.set(memory.rss);
+    metricSet.processExternalBytes.set(memory.external);
+    metricSet.processArrayBuffersBytes.set(memory.arrayBuffers);
+
+    const telemetry = sessions.getMemoryTelemetry?.();
+    if (!telemetry) return;
+
+    metricSet.sessionsVoiceConnected.set(telemetry.voiceConnectionsConnected);
+    metricSet.sessionsPlaying.set(telemetry.playersPlaying);
+    metricSet.sessionsSnapshotDirty.set(telemetry.snapshotDirty);
+    metricSet.sessionsDiagnosticsActive.set(telemetry.diagnosticsActive);
+    metricSet.sessionsIdleTimersActive.set(telemetry.idleTimersActive);
+    metricSet.sessionPlayerListenerEntries.set(telemetry.playerListenerEntries);
+    metricSet.sessionPendingTracks.set(telemetry.pendingTracksTotal);
+  };
 
   sessions.on('trackStart', onTrackStart);
   sessions.on('trackError', onTrackError);
   sessions.on('destroyed', onDestroyed);
 
   const interval = setInterval(() => {
-    metricSet.sessionsActive.set(sessions.sessions.size);
-  }, 5_000);
+    publishTelemetry();
+  }, telemetryIntervalMs);
   interval.unref?.();
+  publishTelemetry();
 
   return () => {
     clearInterval(interval);

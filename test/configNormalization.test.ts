@@ -65,6 +65,15 @@ test('loadConfig enables unhealthy-exit watchdog by default', () => {
   assert.equal(config.unhealthyCheckIntervalMs, 5000);
 });
 
+test('loadConfig enables memory telemetry defaults and heap snapshot signal', () => {
+  const config = loadConfig(buildEnv());
+
+  assert.equal(config.memoryTelemetryIntervalMs, 15000);
+  assert.equal(config.memoryTelemetryLogIntervalMs, 300000);
+  assert.equal(config.heapSnapshotSignalEnabled, true);
+  assert.equal(config.heapSnapshotDir, '.heap-snapshots');
+});
+
 
 
 

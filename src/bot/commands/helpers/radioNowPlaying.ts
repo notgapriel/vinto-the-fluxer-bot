@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
 
 const RADIO_LOOKUP_CACHE_TTL_MS = 45_000;
+const RADIO_LOOKUP_CACHE_MAX_SIZE = 512;
+const RADIO_LOOKUP_CACHE_SWEEP_MS = Math.max(5_000, RADIO_LOOKUP_CACHE_TTL_MS);
 const RADIO_LOOKUP_TIMEOUT_MS = 12_000;
 const RADIO_SAMPLE_MAX_BYTES = 768 * 1024;
 const RADIO_SAMPLE_MIN_BYTES = 64 * 1024;
@@ -43,6 +45,27 @@ const radioLookupCache = new Map<string, { value: RadioLookupResult; expiresAt: 
 const radioLookupInFlight = new Map<string, Promise<RadioLookupResult | null>>();
 let radioSpawn: SpawnLike = spawn;
 
+function pruneRadioLookupCache(now: number = Date.now()): void {
+  for (const [key, entry] of radioLookupCache.entries()) {
+    if (entry.expiresAt <= now) {
+      radioLookupCache.delete(key);
+    }
+  }
+}
+
+function trimRadioLookupCache(): void {
+  while (radioLookupCache.size > RADIO_LOOKUP_CACHE_MAX_SIZE) {
+    const oldest = radioLookupCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    radioLookupCache.delete(oldest);
+  }
+}
+
+const radioLookupCacheSweepHandle = setInterval(() => {
+  pruneRadioLookupCache();
+}, RADIO_LOOKUP_CACHE_SWEEP_MS);
+radioLookupCacheSweepHandle.unref?.();
+
 export function __setRadioNowPlayingSpawnForTests(value: unknown): void {
   radioSpawn = (typeof value === 'function' ? value : spawn) as SpawnLike;
 }
@@ -62,10 +85,13 @@ function getCachedRadioLookup(url: unknown): RadioLookupResult | null {
 function setCachedRadioLookup(url: unknown, value: RadioLookupResult | null): void {
   const key = String(url ?? '').trim();
   if (!key || !value) return;
+  pruneRadioLookupCache();
+  radioLookupCache.delete(key);
   radioLookupCache.set(key, {
     value,
     expiresAt: Date.now() + RADIO_LOOKUP_CACHE_TTL_MS,
   });
+  trimRadioLookupCache();
 }
 
 function toNormalizedResult(value: unknown, source: string): RadioLookupResult | null {

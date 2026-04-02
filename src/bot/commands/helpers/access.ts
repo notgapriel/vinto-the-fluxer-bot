@@ -10,6 +10,29 @@ import type { CommandContextLike, GuildConfigLike, SessionLike } from './types.t
 
 const playCooldowns = new Map<string, number>();
 const manageGuildPermissionCache = new Map<string, { expiresAt: number; value: boolean }>();
+const MANAGE_GUILD_PERMISSION_CACHE_MAX_SIZE = 10_000;
+const MANAGE_GUILD_PERMISSION_CACHE_SWEEP_MS = Math.max(5_000, PERMISSION_CACHE_TTL_MS);
+
+function pruneManageGuildPermissionCache(now: number = Date.now()) {
+  for (const [key, entry] of manageGuildPermissionCache.entries()) {
+    if (entry.expiresAt <= now) {
+      manageGuildPermissionCache.delete(key);
+    }
+  }
+}
+
+function trimManageGuildPermissionCache() {
+  while (manageGuildPermissionCache.size > MANAGE_GUILD_PERMISSION_CACHE_MAX_SIZE) {
+    const oldest = manageGuildPermissionCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    manageGuildPermissionCache.delete(oldest);
+  }
+}
+
+const manageGuildPermissionCacheSweepHandle = setInterval(() => {
+  pruneManageGuildPermissionCache();
+}, MANAGE_GUILD_PERMISSION_CACHE_SWEEP_MS);
+manageGuildPermissionCacheSweepHandle.unref?.();
 
 type PermissionCarrier = Record<string, unknown> & {
   permissions?: unknown;
@@ -233,7 +256,10 @@ function getCachedManageGuildPermission(ctx: CommandContextLike) {
 function setCachedManageGuildPermission(ctx: CommandContextLike, value: boolean) {
   const key = permissionCacheKey(ctx);
   if (!key || key === ':') return;
+  pruneManageGuildPermissionCache();
+  manageGuildPermissionCache.delete(key);
   manageGuildPermissionCache.set(key, { value, expiresAt: Date.now() + PERMISSION_CACHE_TTL_MS });
+  trimManageGuildPermissionCache();
 }
 
 function extractRoleIdsFromMember(member: { roles?: unknown[]; role_ids?: unknown[] } | null | undefined) {

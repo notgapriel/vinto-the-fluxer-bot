@@ -201,6 +201,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     playbackDiagnosticsEnabled: parseBool(env.PLAYBACK_DIAGNOSTICS_ENABLED, false),
     playbackDiagnosticsIntervalMs: parsePositiveInt(env.PLAYBACK_DIAGNOSTICS_INTERVAL_MS, 1_000),
     auddApiToken: env.AUDD_API_TOKEN?.trim() || null,
+    memoryTelemetryIntervalMs: parsePositiveInt(env.MEMORY_TELEMETRY_INTERVAL_MS, 15_000),
+    memoryTelemetryLogIntervalMs: parseNonNegativeInt(env.MEMORY_TELEMETRY_LOG_INTERVAL_MS, 300_000),
+    heapSnapshotSignalEnabled: parseBool(env.HEAP_SNAPSHOT_SIGNAL_ENABLED, true),
+    heapSnapshotDir: env.HEAP_SNAPSHOT_DIR?.trim() || '.heap-snapshots',
 
     commandRateLimitEnabled: parseBool(env.COMMAND_RATE_LIMIT_ENABLED, true),
     commandUserWindowMs: parsePositiveInt(env.COMMAND_USER_WINDOW_MS, 10_000),
