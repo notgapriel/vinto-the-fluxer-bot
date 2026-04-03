@@ -77,6 +77,17 @@ type PumpStats = {
   pendingBufferBytes: number;
 };
 
+type FfiClientEmitterLike = {
+  off?: (event: string, listener: (...args: unknown[]) => void) => unknown;
+  removeListener?: (event: string, listener: (...args: unknown[]) => void) => unknown;
+};
+
+type InternalRoomLike = {
+  onFfiEvent?: ((...args: unknown[]) => void) | null;
+  preConnectEvents?: unknown[];
+  removeAllListeners?: (event?: string) => unknown;
+};
+
 export class VoiceConnection {
   [key: string]: unknown;
   gateway: GatewayLike;
@@ -179,14 +190,16 @@ export class VoiceConnection {
     this._stopAudioPump();
     this.gateway.leaveVoice(this.guildId);
 
+    const room = this.room;
     this._detachRoomListeners();
-    await this.room?.disconnect().catch(() => null);
+    await room?.disconnect().catch(() => null);
+    this._detachRoomFfiListener(room);
+    this._resetRoomPreConnectEvents(room);
+    room?.removeAllListeners?.();
+    await this._closeAudioResources();
 
     this.room = null;
     this.channelId = null;
-    this.audioSource = null;
-    this.audioTrack = null;
-    this.audioTrackSid = null;
   }
 
   async _cleanupFailedConnect(room: Room) {
@@ -199,6 +212,11 @@ export class VoiceConnection {
       // ignore failed room teardown during connect rollback
     }
 
+    this._detachRoomFfiListener(room);
+    this._resetRoomPreConnectEvents(room);
+    room.removeAllListeners?.();
+    await this._closeAudioResources();
+
     try {
       this.gateway.leaveVoice(this.guildId);
     } catch {
@@ -207,9 +225,36 @@ export class VoiceConnection {
 
     this.room = null;
     this.channelId = null;
+  }
+
+  async _closeAudioResources() {
+    const source = this.audioSource;
+    const track = this.audioTrack;
+
     this.audioSource = null;
     this.audioTrack = null;
     this.audioTrackSid = null;
+
+    try {
+      source?.clearQueue();
+    } catch {
+      // ignore queue clear errors during teardown
+    }
+
+    if (track) {
+      try {
+        await track.close(true);
+      } catch {
+        // ignore track teardown failures during disconnect
+      }
+      return;
+    }
+
+    try {
+      await source?.close();
+    } catch {
+      // ignore source teardown failures during disconnect
+    }
   }
 
   _detachRoomListeners() {
@@ -231,6 +276,28 @@ export class VoiceConnection {
       return;
     }
     room.removeAllListeners?.(RoomEvent.Disconnected);
+  }
+
+  _detachRoomFfiListener(room: Room | null) {
+    const ffiClient = (globalThis as typeof globalThis & {
+      _ffiClientInstance?: FfiClientEmitterLike;
+    })._ffiClientInstance;
+    const listener = (room as unknown as InternalRoomLike | null)?.onFfiEvent;
+
+    if (!ffiClient || typeof listener !== 'function') return;
+
+    if (typeof ffiClient.off === 'function') {
+      ffiClient.off('ffi_event', listener);
+      return;
+    }
+
+    ffiClient.removeListener?.('ffi_event', listener);
+  }
+
+  _resetRoomPreConnectEvents(room: Room | null) {
+    const internalRoom = room as unknown as InternalRoomLike | null;
+    if (!internalRoom || !Array.isArray(internalRoom.preConnectEvents)) return;
+    internalRoom.preConnectEvents.length = 0;
   }
 
   async sendAudio(pcmStream: unknown) {
