@@ -512,6 +512,8 @@ registry.register(createCommand({
         }
 
         let firstTrackLabel = trackLabel(firstAdded);
+        const requestedBy = ctx.authorId;
+        const maxPlaylistTracks = ctx.config.maxPlaylistTracks;
         await progress.info(
           shouldInterruptLivePlayback
             ? `Stopped live stream. Playing now: ${firstTrackLabel}\nLoading remaining playlist tracks in the background...`
@@ -520,8 +522,11 @@ registry.register(createCommand({
 
         const initialPreviewTrack = preview[0] ?? null;
         void (async () => {
+          let resolved: TrackDataLike[] | null = null;
+          let remainingResolved: TrackDataLike[] | null = null;
+          let remainingTracks: TrackDataLike[] | null = null;
           try {
-            const hydratedFirstTrack = await hydrateFirstYouTubeMixTrack(session.player, firstAdded, ctx.authorId).catch(() => null);
+            const hydratedFirstTrack = await hydrateFirstYouTubeMixTrack(session.player, firstAdded, requestedBy).catch(() => null);
             if (hydratedFirstTrack) {
               firstTrackLabel = trackLabel(hydratedFirstTrack);
               await progress.info(
@@ -531,18 +536,18 @@ registry.register(createCommand({
               );
             }
 
-            const resolved = await session.player.previewTracks(query, {
-              requestedBy: ctx.authorId,
-              ...(ctx.config.maxPlaylistTracks != null ? { limit: ctx.config.maxPlaylistTracks } : {}),
+            resolved = await session.player.previewTracks(query, {
+              requestedBy,
+              ...(maxPlaylistTracks != null ? { limit: maxPlaylistTracks } : {}),
             });
             const resolvedTotalCount = resolved.length;
-            const remainingResolved = removeFirstMatchingTrack(resolved, initialPreviewTrack);
+            remainingResolved = removeFirstMatchingTrack(resolved, initialPreviewTrack);
             if (!remainingResolved.length) {
               await progress.success(`Playing now: ${firstTrackLabel}\nQueued **${resolvedTotalCount}/${resolvedTotalCount}** playlist tracks.`);
               return;
             }
 
-            const remainingTracks = remainingResolved.map((track: TrackDataLike) => session.player.createTrackFromData(track, ctx.authorId));
+            remainingTracks = remainingResolved.map((track: TrackDataLike) => session.player.createTrackFromData(track, requestedBy));
             const backgroundResult = await enqueueTracksUntilFull(session.player, remainingTracks, {
               dedupe: session.settings.dedupeEnabled,
               playNext: false,
@@ -578,6 +583,10 @@ registry.register(createCommand({
               `Playing now: ${firstTrackLabel}\nBackground playlist loading failed.`,
               [{ name: 'Error', value: String(err instanceof Error ? err.message : err).slice(0, 1000) || 'Unknown error' }]
             );
+          } finally {
+            resolved = null;
+            remainingResolved = null;
+            remainingTracks = null;
           }
         })();
       });

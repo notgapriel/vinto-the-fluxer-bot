@@ -153,15 +153,21 @@ export class VoiceConnection {
       ? endpoint
       : `wss://${endpoint}`;
 
-    this.room = new Room();
+    const room = new Room();
+    this.room = room;
     this.roomDisconnectedListener = () => {
       this.logger?.warn?.('Voice room disconnected', { guildId: this.guildId });
     };
-    this.room.on(RoomEvent.Disconnected, this.roomDisconnectedListener);
+    room.on(RoomEvent.Disconnected, this.roomDisconnectedListener);
 
-    await this.room.connect(roomUrl, token);
-    this.channelId = channelId;
-    await this._ensureAudioTrack();
+    try {
+      await room.connect(roomUrl, token);
+      this.channelId = channelId;
+      await this._ensureAudioTrack();
+    } catch (err) {
+      await this._cleanupFailedConnect(room);
+      throw err;
+    }
 
     this.logger?.info?.('Voice connection established', {
       guildId: this.guildId,
@@ -175,6 +181,29 @@ export class VoiceConnection {
 
     this._detachRoomListeners();
     await this.room?.disconnect().catch(() => null);
+
+    this.room = null;
+    this.channelId = null;
+    this.audioSource = null;
+    this.audioTrack = null;
+    this.audioTrackSid = null;
+  }
+
+  async _cleanupFailedConnect(room: Room) {
+    this._stopAudioPump();
+    this._detachRoomListeners();
+
+    try {
+      await room.disconnect();
+    } catch {
+      // ignore failed room teardown during connect rollback
+    }
+
+    try {
+      this.gateway.leaveVoice(this.guildId);
+    } catch {
+      // ignore gateway leave failures during connect rollback
+    }
 
     this.room = null;
     this.channelId = null;
@@ -365,6 +394,33 @@ export class VoiceConnection {
     });
   }
 
+  _assertPumpActive(token: number) {
+    if (token !== this.audioPumpToken) {
+      const aborted = new Error('Audio pump aborted.');
+      (aborted as Error & { code?: string }).code = 'ERR_AUDIO_PUMP_ABORTED';
+      throw aborted;
+    }
+  }
+
+  async _awaitPumpOperation<T>(promiseFactory: () => Promise<T>, token: number) {
+    this._assertPumpActive(token);
+
+    const operation = promiseFactory();
+    while (true) {
+      const result = await Promise.race([
+        operation.then((value) => ({ done: true as const, value })),
+        new Promise<{ done: false }>((resolve) => setTimeout(() => resolve({ done: false }), PUMP_IDLE_WAIT_MS)),
+      ]);
+
+      if (result.done) {
+        this._assertPumpActive(token);
+        return result.value;
+      }
+
+      this._assertPumpActive(token);
+    }
+  }
+
   _isExpectedPumpError(err: unknown, token: number) {
     if (token !== this.audioPumpToken) return true;
     if (!this.connected) return true;
@@ -375,6 +431,7 @@ export class VoiceConnection {
     return (
       code === 'ERR_STREAM_PREMATURE_CLOSE'
       || code === 'ERR_STREAM_DESTROYED'
+      || code === 'ERR_AUDIO_PUMP_ABORTED'
       || code === 'EPIPE'
       || message.includes('premature close')
       || message.includes('stream destroyed')
@@ -610,13 +667,13 @@ export class VoiceConnection {
 
           if (source.queuedDuration > TARGET_QUEUE_MS) {
             stats.backpressureWaits += 1;
-            await source.waitForPlayout();
+            await this._awaitPumpOperation(() => source.waitForPlayout(), token);
           }
           if (Number.isFinite(source.queuedDuration)) {
             stats.maxQueuedDurationMs = Math.max(stats.maxQueuedDurationMs, Number(source.queuedDuration));
           }
 
-          await source.captureFrame(frame);
+          await this._awaitPumpOperation(() => source.captureFrame(frame), token);
           stats.framesCaptured += 1;
           stats.pendingBufferBytes = pending.length;
           if (inputPaused && pending.length <= targetPendingBytes && Number(source.queuedDuration) <= TARGET_QUEUE_MS) {
@@ -631,7 +688,7 @@ export class VoiceConnection {
 
         const samples = new Int16Array(padded.buffer, padded.byteOffset, SAMPLES_PER_FRAME);
         const frame = new AudioFrame(new Int16Array(samples), SAMPLE_RATE, CHANNELS, SAMPLES_PER_CHANNEL);
-        await source.captureFrame(frame);
+        await this._awaitPumpOperation(() => source.captureFrame(frame), token);
         stats.framesCaptured += 1;
         stats.pendingBufferBytes = 0;
       }

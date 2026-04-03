@@ -110,8 +110,12 @@ export const pipelineMethods: LooseMethodMap = {
     this._bindPipelineErrorHandler(this.ffmpeg.stdin, 'ffmpeg.stdin');
     this._bindPipelineErrorHandler(this.ffmpeg.stdout, 'ffmpeg.stdout');
 
-    this.sourceStream.on('error', () => {
+    const onSourceStreamError = () => {
       this.ffmpeg?.kill('SIGKILL');
+    };
+    this.sourceStream.on('error', onSourceStreamError);
+    this.pipelineErrorHandlers.push(() => {
+      this.sourceStream?.off?.('error', onSourceStreamError);
     });
 
     this.sourceStream.pipe(this.ffmpeg.stdin);
