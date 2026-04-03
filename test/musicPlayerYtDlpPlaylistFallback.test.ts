@@ -39,6 +39,32 @@ test('yt-dlp playlist fallback resolves track entries to playable URLs', async (
   assert.equal(tracks[1]!.url, 'https://www.youtube.com/watch?v=osjLPATYHOY');
 });
 
+test('yt-dlp playlist fallback normalizes watch-context entry urls to canonical watch urls', async () => {
+  const player = createPlayer();
+
+  player._runYtDlpCommand = async () => ({
+    code: 0,
+    stdout: JSON.stringify({
+      entries: [
+        {
+          webpage_url: 'https://www.youtube.com/watch?v=KRTmG7a56sY&list=RDTMAK5uy_kset8DisdE7LSD4TNjEVvrKRTmG7a56sY',
+          title: 'Mix Entry',
+          duration: 201,
+        },
+      ],
+    }),
+    stderr: '',
+  });
+
+  const tracks = await player._resolveYouTubePlaylistTracksViaYtDlp(
+    'https://www.youtube.com/playlist?list=RDTMAK5uy_kset8DisdE7LSD4TNjEVvrKRTmG7a56sY',
+    'user-1'
+  );
+
+  assert.equal(tracks.length, 1);
+  assert.equal(tracks[0]!.url, 'https://www.youtube.com/watch?v=KRTmG7a56sY');
+});
+
 test('playlist resolver in default mode prefers yt-dlp before play-dl', async () => {
   const player = createPlayer();
 

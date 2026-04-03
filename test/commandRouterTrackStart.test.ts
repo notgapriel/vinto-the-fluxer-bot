@@ -80,3 +80,49 @@ test('trackStart popup includes the active voice channel mention', async () => {
     text: 'Now playing in <#voice-1>: **Demo Track** (3:00)',
   }]);
 });
+
+test('trackStart popup waits briefly for deferred metadata before sending', async () => {
+  const sessions = new EventEmitter();
+  const router = createRouter(sessions);
+  const calls: Array<{ channelId: string; type: string; text: string }> = [];
+  const track = {
+    title: 'YouTube Track',
+    duration: 'Unknown',
+    source: 'youtube',
+    metadataDeferred: true,
+  };
+
+  router._safeReply = (async (channelId: string, type: string, text: string) => {
+    calls.push({ channelId, type, text });
+    return null;
+  }) as CommandRouter['_safeReply'];
+
+  try {
+    sessions.emit('trackStart', {
+      session: {
+        textChannelId: 'text-1',
+        connection: { channelId: 'voice-1' },
+        settings: {},
+      },
+      track,
+    });
+
+    setTimeout(() => {
+      track.title = 'Hydrated Track';
+      track.duration = '3:33';
+      track.metadataDeferred = false;
+    }, 10);
+
+    await new Promise((resolve) => setTimeout(resolve, 1250));
+  } finally {
+    if (router.sessionPanelLiveHandle) clearInterval(router.sessionPanelLiveHandle);
+    if (router.weeklySweepHandle) clearInterval(router.weeklySweepHandle);
+    if (router.ephemeralCleanupHandle) clearInterval(router.ephemeralCleanupHandle);
+  }
+
+  assert.deepEqual(calls, [{
+    channelId: 'text-1',
+    type: 'info',
+    text: 'Now playing in <#voice-1>: **Hydrated Track** (3:33)',
+  }]);
+});

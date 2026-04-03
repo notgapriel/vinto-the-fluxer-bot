@@ -24,22 +24,43 @@ type QueueLifecycleMethods = {
 };
 type QueueLifecycleRuntime = MusicPlayer & QueueLifecycleMethods & {
   getProgressSeconds(): number;
+  nextPlaybackStartupHint: string | null;
+  _scheduleNextTrackPrefetch(): void;
+  _clearNextTrackPrefetch(): void;
 };
+
+function triggerImmediateTrackTransition(player: QueueLifecycleRuntime) {
+  const track = player.currentTrack;
+  const hasStartedPlayback = player.trackStartedAtMs != null;
+  if (!track || !hasStartedPlayback) return;
+
+  const transitionToken = ++player.activePlaybackToken;
+  void player._handleTrackClose(track, 'skip', null, transitionToken).catch((err: unknown) => {
+    player.logger?.warn?.('Immediate skip transition failed', {
+      title: track?.title ?? null,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
 
 export const queueLifecycleMethods: QueueLifecycleMethods & ThisType<QueueLifecycleRuntime> = {
   clearQueue(this: QueueLifecycleRuntime) {
     const removed = this.queue.pendingSize;
     this.queue.tracks = [];
+    this._scheduleNextTrackPrefetch();
     return removed;
   },
 
   shuffleQueue(this: QueueLifecycleRuntime) {
     this.queue.shuffle();
+    this._scheduleNextTrackPrefetch();
     return this.queue.pendingSize;
   },
 
   removeFromQueue(this: QueueLifecycleRuntime, index) {
-    return this.queue.remove(index);
+    const removed = this.queue.remove(index);
+    this._scheduleNextTrackPrefetch();
+    return removed;
   },
 
   getLastHistoryTrack(this: QueueLifecycleRuntime) {
@@ -54,6 +75,7 @@ export const queueLifecycleMethods: QueueLifecycleMethods & ThisType<QueueLifecy
     this.skipRequested = true;
     this._stopVoiceStream();
     this._cleanupProcesses();
+    triggerImmediateTrackTransition(this);
     return true;
   },
 
@@ -67,6 +89,7 @@ export const queueLifecycleMethods: QueueLifecycleMethods & ThisType<QueueLifecy
     this.skipRequested = true;
     this._stopVoiceStream();
     this._cleanupProcesses();
+    triggerImmediateTrackTransition(this);
     return true;
   },
 
@@ -87,6 +110,7 @@ export const queueLifecycleMethods: QueueLifecycleMethods & ThisType<QueueLifecy
     const clone = this._cloneTrack(previous);
     this.queue.addFront(clone);
     this.emit('tracksAdded', [clone]);
+    this._scheduleNextTrackPrefetch();
     return clone;
   },
 
@@ -128,6 +152,7 @@ export const queueLifecycleMethods: QueueLifecycleMethods & ThisType<QueueLifecy
     this.skipRequested = true;
     this._stopVoiceStream();
     this._cleanupProcesses();
+    triggerImmediateTrackTransition(this);
     return target;
   },
 
@@ -199,9 +224,11 @@ export const queueLifecycleMethods: QueueLifecycleMethods & ThisType<QueueLifecy
   skip(this: QueueLifecycleRuntime) {
     if (!this.playing) return false;
     this._invalidatePlaybackStartup();
+    this.nextPlaybackStartupHint = 'skip';
     this.skipRequested = true;
     this._stopVoiceStream();
     this._cleanupProcesses();
+    triggerImmediateTrackTransition(this);
     return true;
   },
 
@@ -211,6 +238,8 @@ export const queueLifecycleMethods: QueueLifecycleMethods & ThisType<QueueLifecy
     this.consecutiveStartupFailures = 0;
     this.pendingSeekTrack = null;
     this.queue.clear();
+    this.nextPlaybackStartupHint = null;
+    this._clearNextTrackPrefetch();
     this._cleanupProcesses();
     this._cleanupRuntimeYtDlpCookiesFile?.();
     this._stopVoiceStream();

@@ -119,7 +119,18 @@ export async function resolveActiveVoiceChannelOrThrow(ctx: CommandContextLike, 
   );
 }
 
-export async function ensureConnectedSession(ctx: CommandContextLike, explicitChannelId: string | null = null): Promise<SessionLike> {
+type PreparedSessionConnection = {
+  hadSession: boolean;
+  hasUsablePlayer: boolean;
+  resolvedVoice: string;
+  selector: { voiceChannelId: string };
+  session: SessionLike;
+};
+
+export async function prepareSessionConnection(
+  ctx: CommandContextLike,
+  explicitChannelId: string | null = null,
+): Promise<PreparedSessionConnection> {
   const resolvedVoice = explicitChannelId ?? await resolveActiveVoiceChannelOrThrow(ctx, { fallbackCommand: 'play' });
 
   if (ctx.permissionService?.canBotJoinAndSpeak) {
@@ -162,6 +173,21 @@ export async function ensureConnectedSession(ctx: CommandContextLike, explicitCh
     : true;
 
   ctx.sessions.bindTextChannel(ctx.guildId, ctx.channelId, selector);
+  return {
+    hadSession,
+    hasUsablePlayer,
+    resolvedVoice,
+    selector,
+    session,
+  };
+}
+
+export async function connectPreparedSession(
+  ctx: CommandContextLike,
+  prepared: PreparedSessionConnection,
+): Promise<SessionLike> {
+  const { hadSession, hasUsablePlayer, resolvedVoice, session } = prepared;
+
   if (session.connection.connected && hasUsablePlayer) return session;
 
   try {
@@ -187,6 +213,11 @@ export async function ensureConnectedSession(ctx: CommandContextLike, explicitCh
   }
 
   return session;
+}
+
+export async function ensureConnectedSession(ctx: CommandContextLike, explicitChannelId: string | null = null): Promise<SessionLike> {
+  const prepared = await prepareSessionConnection(ctx, explicitChannelId);
+  return connectPreparedSession(ctx, prepared);
 }
 
 export async function applyVoiceProfileIfConfigured(ctx: CommandContextLike, session: SessionLike, explicitChannelId: string | null = null) {

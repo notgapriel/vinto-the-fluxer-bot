@@ -244,6 +244,7 @@ export const resolverMethods: LooseMethodMap = {
       title: data?.title,
       url: data?.url,
       duration: data?.duration,
+      metadataDeferred: data?.metadataDeferred ?? false,
       thumbnailUrl: normalizedThumbnailUrl,
       requestedBy: requestedBy ?? data?.requestedBy ?? null,
       source: data?.source ?? 'stored',
@@ -260,6 +261,47 @@ export const resolverMethods: LooseMethodMap = {
       isLive: data?.isLive ?? data?.is_live ?? false,
       seekStartSec: data?.seekStartSec ?? data?.seek_start_sec ?? 0,
     });
+  },
+
+  async hydrateTrackMetadata(
+    data: Record<string, unknown>,
+    options: { requestedBy?: string | null } = { requestedBy: null },
+  ) {
+    const url = String(data?.url ?? '').trim();
+    if (!url) return null;
+
+    const requestedBy = options.requestedBy ?? (String(data?.requestedBy ?? '').trim() || null);
+    const isDeferredYouTubeTrack = isYouTubeUrl(url) && data?.metadataDeferred === true;
+    if (!isDeferredYouTubeTrack) return null;
+
+    try {
+      return await this._resolveSingleYouTubeTrackViaYtDlp(url, requestedBy);
+    } catch (err) {
+      this.logger?.warn?.('yt-dlp deferred YouTube metadata hydration failed, trying play-dl fallback', {
+        url,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      const info = await this._fetchSingleYouTubeTrackViaPlayDl(url);
+      return this._buildTrack({
+        title: info.video_details.title,
+        url,
+        duration: info.video_details.durationRaw,
+        thumbnailUrl: pickThumbnailUrlFromItem(info.video_details),
+        requestedBy,
+        source: 'youtube',
+        artist: pickTrackArtistFromMetadata(info.video_details),
+      });
+    } catch (err) {
+      this.logger?.warn?.('play-dl deferred YouTube metadata hydration failed after yt-dlp attempt', {
+        url,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    return null;
   },
 
   async _resolveSingleYouTubeTrack(url: string, requestedBy: string | null) {

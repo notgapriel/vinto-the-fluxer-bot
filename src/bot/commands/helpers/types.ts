@@ -27,6 +27,7 @@ export type TrackDataLike = {
   url?: string | null;
   title?: string | null;
   duration?: string | null;
+  metadataDeferred?: boolean;
   source?: string | null;
   requestedBy?: string | null;
   isLive?: boolean | null;
@@ -70,6 +71,13 @@ export type SessionLike = {
     filterPreset?: string;
     eqPreset?: string;
     createTrackFromData: (track: unknown, requestedBy?: string | null) => TrackDataLike;
+    hydrateTrackMetadata?: (
+      track: TrackDataLike,
+      options?: { requestedBy?: string | null }
+    ) => Promise<TrackDataLike | null>;
+    prefetchTrackPlayback?: (
+      track: TrackDataLike
+    ) => Promise<void>;
     enqueueResolvedTracks: (tracks: unknown[], options?: Record<string, unknown>) => TrackDataLike[];
     play: () => Promise<unknown>;
     skip: () => Promise<unknown> | unknown;

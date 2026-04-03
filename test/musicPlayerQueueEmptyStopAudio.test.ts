@@ -245,6 +245,131 @@ test('seekTo rejects positions at or beyond the current track length', () => {
   }, /exceeds track length/i);
 });
 
+test('skip() advances to the next queued track immediately after cleanup', async () => {
+  const voice = createVoice();
+  const player = new MusicPlayer(voice, {});
+  const currentTrack = player._buildTrack({
+    title: 'Current Track',
+    url: 'https://example.com/current',
+    duration: '03:00',
+    source: 'url',
+    requestedBy: 'user-1',
+  });
+  const nextTrack = player._buildTrack({
+    title: 'Next Track',
+    url: 'https://example.com/next',
+    duration: '02:30',
+    source: 'url',
+    requestedBy: 'user-1',
+  });
+
+  const staleFfmpeg = new EventEmitter() as FfmpegMock;
+  staleFfmpeg.stdout = new PassThrough();
+  staleFfmpeg.kill = () => {};
+
+  const startedUrls: string[] = [];
+  player.queue.current = currentTrack;
+  player.queue.add(nextTrack);
+  player.playing = true;
+  player.trackStartedAtMs = Date.now() - 1_000;
+  player.ffmpeg = staleFfmpeg;
+  player._startHttpUrlPipeline = async (url: string) => {
+    startedUrls.push(url);
+    player.ffmpeg = {
+      stdout: new PassThrough(),
+      once() {},
+      stderr: new PassThrough(),
+    } as unknown as typeof player.ffmpeg;
+  };
+  player._awaitInitialPlaybackChunk = async () => {};
+
+  assert.equal(player.skip(), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(startedUrls, ['https://example.com/next']);
+  assert.equal(player.currentTrack?.title, 'Next Track');
+});
+
+test('play() uses shorter startup timeout for the next track after a skip transition', async () => {
+  const voice = createVoice();
+  const player = new MusicPlayer(voice, {});
+  let startupTimeoutMs: number | null = null;
+
+  player.nextPlaybackStartupHint = 'skip';
+  player._startYouTubePipeline = async () => {
+    player.ffmpeg = {
+      stdout: {
+        pipe() {},
+      },
+      once() {},
+      stderr: new PassThrough(),
+    } as unknown as typeof player.ffmpeg;
+  };
+  player._awaitInitialPlaybackChunk = async (_stream: unknown, _proc: unknown, timeoutMs: number) => {
+    startupTimeoutMs = timeoutMs;
+  };
+
+  player.enqueueResolvedTracks([
+    player._buildTrack({
+      title: 'Skipped To Track',
+      url: 'https://www.youtube.com/watch?v=QX_VR_Wshvk',
+      duration: '03:00',
+      source: 'youtube',
+      requestedBy: 'user-1',
+    }),
+  ]);
+
+  await player.play();
+
+  assert.equal(startupTimeoutMs, 4_000);
+});
+
+test('play() uses a prefetched YouTube stream URL when available', async () => {
+  const voice = createVoice();
+  const player = new MusicPlayer(voice, {});
+  let startedUrl: string | null = null;
+
+  player._scheduleNextTrackPrefetch = () => {};
+  player._startHttpUrlPipeline = async (url: string) => {
+    startedUrl = url;
+    player.ffmpeg = {
+      stdout: {
+        pipe() {},
+      },
+      once() {},
+      stderr: new PassThrough(),
+    } as unknown as typeof player.ffmpeg;
+  };
+  player._awaitInitialPlaybackChunk = async () => {};
+  player._startYouTubePipeline = async () => {
+    throw new Error('Expected prefetched stream URL to bypass yt-dlp startup.');
+  };
+
+  player.enqueueResolvedTracks([
+    player._buildTrack({
+      title: 'Prefetched Track',
+      url: 'https://www.youtube.com/watch?v=abcdefghijk',
+      duration: '03:00',
+      source: 'youtube',
+      requestedBy: 'user-1',
+    }),
+  ]);
+
+  const queuedTrack = player.pendingTracks[0] ?? null;
+  const prefetchKey = player._getTrackPrefetchKey(queuedTrack);
+  assert.ok(prefetchKey);
+  player.nextTrackPrefetchState = {
+    key: String(prefetchKey),
+    streamUrl: 'https://stream.example.com/audio',
+    createdAtMs: Date.now(),
+  };
+
+  await player.play();
+
+  assert.equal(startedUrl, 'https://stream.example.com/audio');
+});
+
 
 
 

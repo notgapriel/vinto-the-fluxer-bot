@@ -80,6 +80,7 @@ import type { PipelineProcess, Track, TrackInput } from '../types/domain.ts';
 const NORMALIZED_INPUT_URL_CACHE_MAX_SIZE = 500;
 const DEEZER_STREAM_META_CACHE_MAX_SIZE = 1_000;
 const STARTUP_FAILURE_STREAK_LIMIT = 3;
+const NEXT_TRACK_PREFETCH_TTL_MS = 10 * 60_000;
 
 interface VoiceAdapterLike {
   sendAudio?: (stream: unknown) => Promise<unknown>;
@@ -160,6 +161,7 @@ type BuiltTrackInput = {
   title: string;
   url: string;
   duration: string | number | null | undefined;
+  metadataDeferred?: boolean;
   thumbnailUrl?: string | null;
   requestedBy?: string | null | undefined;
   source: string;
@@ -191,6 +193,10 @@ export class MusicPlayer extends EventEmitter {
   declare setVolumePercent: (value: number) => number;
   declare setLoopMode: (mode: string) => string;
   declare createTrackFromData: (track: TrackInput, requestedBy?: string | null) => Track;
+  declare hydrateTrackMetadata: (
+    track: TrackInput,
+    options?: { requestedBy?: string | null }
+  ) => Promise<Track | null>;
   declare previewTracks: (
     query: string,
     options: { requestedBy?: string | null; limit?: number }
@@ -243,6 +249,8 @@ export class MusicPlayer extends EventEmitter {
   declare _resolveTidalByGuess: BivariantCallback<[string, (string | null | undefined)?, (number | null | undefined)?], Promise<Track[]>>;
   declare _tidalApiRequest: (pathname: string, query?: Record<string, unknown>) => Promise<unknown>;
   declare _resolveSingleYouTubeTrack: BivariantCallback<[string, (string | null | undefined)?], Promise<Track[]>>;
+  declare _resolveSingleYouTubeTrackViaYtDlp: BivariantCallback<[string, (string | null | undefined)?], Promise<Track>>;
+  declare _fetchSingleYouTubeTrackViaPlayDl: (url: string) => Promise<unknown>;
   declare _resolveYouTubePlaylistTracks: BivariantCallback<
     [string, (string | null | undefined)?, ({ fallbackWatchUrl?: string | null | undefined } | undefined)?],
     Promise<Track[]>
@@ -258,6 +266,12 @@ export class MusicPlayer extends EventEmitter {
   declare _resolveRadioStreamTrack: (url: string, requestedBy: string | null, seen?: Set<string> | null) => Promise<Track | null>;
   declare _resolveFromUrlFallbackSearch: (url: string, requestedBy: string | null, source: string) => Promise<Track[]>;
   declare _normalizeInputUrl: (url: unknown) => Promise<string>;
+  declare _getYtDlpClientStrategies: () => Array<boolean | string>;
+  declare _resolveYtDlpStreamUrl: (
+    url: string,
+    formatSelector?: string | null,
+    includeClientArg?: boolean | string | null
+  ) => Promise<string | null>;
   declare _startYtDlpPipeline: (url: string, seekSec?: number) => Promise<void>;
   declare _cloneTrack: (track: Track, overrides?: Partial<Track> & { id?: string; queuedAt?: number }) => Track;
   declare _trackKey: (track: Partial<Track> | null | undefined) => string | null;
@@ -268,7 +282,7 @@ export class MusicPlayer extends EventEmitter {
   declare _createLiveAudioProcessor: () => LiveAudioProcessor;
   declare _shouldUseLiveAudioProcessor: () => boolean;
   declare _awaitInitialPlaybackChunk: BivariantCallback<[NonNullable<PipelineProcess['stdout']>, PipelineProcess, number], Promise<void>>;
-  declare _getInitialPlaybackChunkTimeoutMs: (track: Track) => number;
+  declare _getInitialPlaybackChunkTimeoutMs: (track: Track, options?: { hint?: string | null }) => number;
   declare _startPlayDlPipeline: (url: string, seekSec?: number) => Promise<void>;
   declare _startHttpUrlPipeline: BivariantCallback<[string, number, ({ isLive?: boolean } | undefined)?], Promise<void>>;
   declare _startYouTubePipeline: (url: string, seekSec?: number) => Promise<void>;
@@ -342,6 +356,11 @@ export class MusicPlayer extends EventEmitter {
   lastKnownTrackAtMs: number;
   activePlaybackToken: number;
   playbackStartupToken: number;
+  nextPlaybackStartupHint: string | null;
+  nextTrackPrefetchToken: number;
+  nextTrackPrefetchInFlightKey: string | null;
+  nextTrackPrefetchPromise: Promise<void> | null;
+  nextTrackPrefetchState: { key: string; streamUrl: string; createdAtMs: number } | null;
   soundcloudClientIdResolvedAt: number;
   _lastYtDlpDiagnostics: Record<string, unknown> | null;
   _lastFfmpegArgs: string[] | null;
@@ -434,6 +453,11 @@ export class MusicPlayer extends EventEmitter {
     this.lastKnownTrackAtMs = 0;
     this.activePlaybackToken = 0;
     this.playbackStartupToken = 0;
+    this.nextPlaybackStartupHint = null;
+    this.nextTrackPrefetchToken = 0;
+    this.nextTrackPrefetchInFlightKey = null;
+    this.nextTrackPrefetchPromise = null;
+    this.nextTrackPrefetchState = null;
     this.soundcloudClientIdResolvedAt = this.soundcloudClientId ? Date.now() : 0;
 
     this._lastYtDlpDiagnostics = null;
@@ -598,6 +622,7 @@ export class MusicPlayer extends EventEmitter {
     }
 
     this.emit('tracksAdded', filteredTracks);
+    this._scheduleNextTrackPrefetch();
     return filteredTracks;
   }
 
@@ -659,9 +684,12 @@ export class MusicPlayer extends EventEmitter {
     if (this.playing) return;
 
     this._cleanupProcesses();
+    const startupHint = this.nextPlaybackStartupHint;
+    this.nextPlaybackStartupHint = null;
 
     const track = this.queue.next();
     if (!track) {
+      this._clearNextTrackPrefetch();
       this._cleanupRuntimeYtDlpCookiesFile();
       this._stopVoiceStream();
       this.emit('queueEmpty');
@@ -686,7 +714,19 @@ export class MusicPlayer extends EventEmitter {
       }
 
       if (isYouTubeUrl(trackUrl)) {
-        await this._startYouTubePipeline(trackUrl, track.seekStartSec ?? 0);
+        const seekStartSec = Math.max(0, Number.parseInt(String(track.seekStartSec ?? 0), 10) || 0);
+        const prefetchedStreamUrl = seekStartSec <= 0
+          ? this._consumeNextTrackPrefetch(track)
+          : null;
+        if (prefetchedStreamUrl) {
+          this.logger?.debug?.('Using prefetched YouTube stream URL for playback startup', {
+            title: track.title,
+            url: trackUrl,
+          });
+          await this._startHttpUrlPipeline(prefetchedStreamUrl, 0, { isLive: false });
+        } else {
+          await this._startYouTubePipeline(trackUrl, seekStartSec);
+        }
       } else if (track?.isLive || String(track.source ?? '').startsWith('radio')) {
         await this._startHttpUrlPipeline(trackUrl, 0, { isLive: true });
       } else if (String(track.source ?? '').startsWith('audius')) {
@@ -736,7 +776,7 @@ export class MusicPlayer extends EventEmitter {
       await this._awaitInitialPlaybackChunk(
         playbackOutput,
         ffmpegProc,
-        this._getInitialPlaybackChunkTimeoutMs(track)
+        this._getInitialPlaybackChunkTimeoutMs(track, { hint: startupHint })
       );
       this._ensurePlaybackStartupActive(startupToken);
       playbackStarted = true;
@@ -745,6 +785,7 @@ export class MusicPlayer extends EventEmitter {
       this._startPlaybackClock(track.seekStartSec ?? 0);
       this.lastKnownTrack = track;
       this.lastKnownTrackAtMs = Date.now();
+      this._scheduleNextTrackPrefetch();
       this.emit('trackStart', track);
       this.logger?.info?.('Playback started', {
         title: track.title,
@@ -814,6 +855,7 @@ export class MusicPlayer extends EventEmitter {
         return;
       }
 
+      this._clearNextTrackPrefetch();
       this._cleanupRuntimeYtDlpCookiesFile();
       this._stopVoiceStream();
       if (!startupAborted) {
@@ -870,6 +912,175 @@ export class MusicPlayer extends EventEmitter {
       .join(' | ');
     if (!tail) return err;
     return new Error(`${err.message} ${tail}`);
+  }
+
+  _getTrackPrefetchKey(track: Track | null | undefined): string | null {
+    if (!track) return null;
+    const id = String(track.id ?? '').trim();
+    return id || this._trackKey(track);
+  }
+
+  _canPrefetchTrack(track: Track | null | undefined): boolean {
+    if (!track || track.isLive) return false;
+    const url = String(track.url ?? '').trim();
+    if (!url || !isYouTubeUrl(url) || !this.enableYtPlayback) return false;
+    const seekStartSec = Math.max(0, Number.parseInt(String(track.seekStartSec ?? 0), 10) || 0);
+    return seekStartSec <= 0;
+  }
+
+  async _prefetchYouTubeStreamUrl(url: string): Promise<string | null> {
+    const formats = ['bestaudio/best', null];
+    const strategies = this._getYtDlpClientStrategies?.() ?? [false];
+
+    for (const formatSelector of formats) {
+      for (const includeClientArg of strategies) {
+        try {
+          const streamUrl = await this._resolveYtDlpStreamUrl(url, formatSelector, includeClientArg);
+          if (streamUrl) return streamUrl;
+        } catch (err) {
+          this.logger?.debug?.('Next-track YouTube prefetch strategy failed', {
+            url,
+            formatSelector: formatSelector ?? '(default)',
+            includeClientArg,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    return null;
+  }
+
+  _clearNextTrackPrefetch(): void {
+    this.nextTrackPrefetchToken += 1;
+    this.nextTrackPrefetchInFlightKey = null;
+    this.nextTrackPrefetchPromise = null;
+    this.nextTrackPrefetchState = null;
+  }
+
+  _consumeNextTrackPrefetch(track: Track | null | undefined): string | null {
+    const key = this._getTrackPrefetchKey(track);
+    if (!key || this.nextTrackPrefetchState?.key !== key) return null;
+
+    if ((Date.now() - this.nextTrackPrefetchState.createdAtMs) > NEXT_TRACK_PREFETCH_TTL_MS) {
+      this.nextTrackPrefetchState = null;
+      return null;
+    }
+
+    const streamUrl = this.nextTrackPrefetchState.streamUrl;
+    this.nextTrackPrefetchState = null;
+    return streamUrl;
+  }
+
+  _scheduleNextTrackPrefetch(): void {
+    const nextTrack = this.pendingTracks[0] ?? null;
+    if (!this._canPrefetchTrack(nextTrack)) {
+      this._clearNextTrackPrefetch();
+      return;
+    }
+
+    const key = this._getTrackPrefetchKey(nextTrack);
+    const url = String(nextTrack?.url ?? '').trim();
+    if (!key || !url) {
+      this._clearNextTrackPrefetch();
+      return;
+    }
+
+    if (this.nextTrackPrefetchState?.key === key) {
+      if ((Date.now() - this.nextTrackPrefetchState.createdAtMs) <= NEXT_TRACK_PREFETCH_TTL_MS) {
+        return;
+      }
+      this.nextTrackPrefetchState = null;
+    }
+
+    if (this.nextTrackPrefetchInFlightKey === key) {
+      return;
+    }
+
+    if (this.nextTrackPrefetchInFlightKey && this.nextTrackPrefetchInFlightKey !== key) {
+      this._clearNextTrackPrefetch();
+    }
+
+    const token = ++this.nextTrackPrefetchToken;
+    this.nextTrackPrefetchInFlightKey = key;
+    this.nextTrackPrefetchPromise = (async () => {
+      const streamUrl = await this._prefetchYouTubeStreamUrl(url);
+      if (!streamUrl || token !== this.nextTrackPrefetchToken) return;
+
+      const activeNextTrack = this.pendingTracks[0] ?? null;
+      if (this._getTrackPrefetchKey(activeNextTrack) !== key) return;
+
+      this.nextTrackPrefetchState = {
+        key,
+        streamUrl,
+        createdAtMs: Date.now(),
+      };
+      this.logger?.debug?.('Prefetched next YouTube track stream URL', {
+        title: activeNextTrack?.title ?? null,
+        url,
+      });
+    })()
+      .catch((err: unknown) => {
+        if (token !== this.nextTrackPrefetchToken) return;
+        this.logger?.debug?.('Next-track YouTube prefetch failed', {
+          title: nextTrack?.title ?? null,
+          url,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      })
+      .finally(() => {
+        if (token !== this.nextTrackPrefetchToken) return;
+        this.nextTrackPrefetchInFlightKey = null;
+        this.nextTrackPrefetchPromise = null;
+      });
+  }
+
+  async prefetchTrackPlayback(track: Track | null | undefined): Promise<void> {
+    if (!this._canPrefetchTrack(track)) return;
+
+    const key = this._getTrackPrefetchKey(track);
+    const url = String(track?.url ?? '').trim();
+    if (!key || !url) return;
+
+    if (
+      this.nextTrackPrefetchState?.key === key
+      && (Date.now() - this.nextTrackPrefetchState.createdAtMs) <= NEXT_TRACK_PREFETCH_TTL_MS
+    ) {
+      return;
+    }
+
+    const token = ++this.nextTrackPrefetchToken;
+    this.nextTrackPrefetchInFlightKey = key;
+    this.nextTrackPrefetchPromise = (async () => {
+      const streamUrl = await this._prefetchYouTubeStreamUrl(url);
+      if (!streamUrl || token !== this.nextTrackPrefetchToken) return;
+      if (this._getTrackPrefetchKey(track) !== key) return;
+
+      this.nextTrackPrefetchState = {
+        key,
+        streamUrl,
+        createdAtMs: Date.now(),
+      };
+      this.logger?.debug?.('Prefetched YouTube track stream URL for immediate playback', {
+        title: track?.title ?? null,
+        url,
+      });
+    })()
+      .catch((err: unknown) => {
+        if (token !== this.nextTrackPrefetchToken) return;
+        this.logger?.debug?.('Immediate YouTube track prefetch failed', {
+          title: track?.title ?? null,
+          url,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      })
+      .finally(() => {
+        if (token !== this.nextTrackPrefetchToken) return;
+        this.nextTrackPrefetchInFlightKey = null;
+        this.nextTrackPrefetchPromise = null;
+      });
+
+    await this.nextTrackPrefetchPromise;
   }
 
   _clearPipelineState() {

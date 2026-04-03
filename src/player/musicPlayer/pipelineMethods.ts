@@ -33,6 +33,11 @@ function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
   return Boolean(err && typeof err === 'object' && 'code' in err);
 }
 
+function isPythonModuleCommand(cmd: string) {
+  const normalized = String(cmd ?? '').trim().toLowerCase();
+  return normalized === 'py' || normalized === 'python' || normalized === 'python3';
+}
+
 export const pipelineMethods: LooseMethodMap = {
   _getYtDlpClientStrategies() {
     const configured = String(this.ytdlpYoutubeClient ?? '').trim();
@@ -551,38 +556,55 @@ export const pipelineMethods: LooseMethodMap = {
   },
 
   async _runYtDlpCommand(args: string[], timeoutMs = 12_000) {
-    const candidates: string[] = [];
-    if (this.ytdlpBin) candidates.push(this.ytdlpBin);
-    candidates.push('yt-dlp', 'yt_dlp', 'py', 'python', 'python3');
+    const nativeCandidates: string[] = [];
+    if (this.ytdlpBin) nativeCandidates.push(this.ytdlpBin);
+    nativeCandidates.push('yt-dlp', 'yt_dlp');
+    const pythonCandidates = ['py', 'python', 'python3'];
 
-    let lastErr: Error | null = null;
-    for (const cmd of candidates) {
-      let proc;
-      try {
-        if (cmd === 'python3' || cmd === 'python' || cmd === 'py') {
-          proc = await this._spawnProcess(cmd, ['-m', 'yt_dlp', ...args], {
-            stdio: ['ignore', 'pipe', 'pipe'],
-          });
-        } else {
-          proc = await this._spawnProcess(cmd, args, {
-            stdio: ['ignore', 'pipe', 'pipe'],
-          });
+    const tryCandidates = async (candidates: string[], options: { stopAfterFirstExecutionFailure?: boolean } = {}) => {
+      const { stopAfterFirstExecutionFailure = false } = options;
+      let lastErr: Error | null = null;
+
+      for (const cmd of candidates) {
+        let proc;
+        try {
+          if (isPythonModuleCommand(cmd)) {
+            proc = await this._spawnProcess(cmd, ['-m', 'yt_dlp', ...args], {
+              stdio: ['ignore', 'pipe', 'pipe'],
+            });
+          } else {
+            proc = await this._spawnProcess(cmd, args, {
+              stdio: ['ignore', 'pipe', 'pipe'],
+            });
+          }
+        } catch (err: unknown) {
+          if (isErrnoException(err) && err.code === 'ENOENT') {
+            lastErr = err instanceof Error ? err : new Error(String(err));
+            continue;
+          }
+          throw err;
         }
-      } catch (err: unknown) {
-        if (isErrnoException(err) && err.code === 'ENOENT') {
-          lastErr = err instanceof Error ? err : new Error(String(err));
-          continue;
+
+        const output = await this._collectProcessOutput(proc, timeoutMs);
+
+        if (output.code === 0) return output;
+        lastErr = new Error(output.stderr?.trim() || `yt-dlp exited with code ${output.code}`);
+        if (stopAfterFirstExecutionFailure) {
+          throw lastErr;
         }
-        throw err;
       }
 
-      const output = await this._collectProcessOutput(proc, timeoutMs);
+      throw lastErr ?? new Error('yt-dlp command failed');
+    };
 
-      if (output.code === 0) return output;
-      lastErr = new Error(output.stderr?.trim() || `yt-dlp exited with code ${output.code}`);
+    try {
+      return await tryCandidates(nativeCandidates, { stopAfterFirstExecutionFailure: true });
+    } catch (err: unknown) {
+      if (isErrnoException(err) && err.code === 'ENOENT') {
+        return await tryCandidates(pythonCandidates);
+      }
+      throw err instanceof Error ? err : new Error(String(err));
     }
-
-    throw lastErr ?? new Error('yt-dlp command failed');
   },
 
   async _probeHttpAudioTrack(url: string, timeoutMs = 15_000) {
@@ -861,9 +883,16 @@ export const pipelineMethods: LooseMethodMap = {
     });
   },
 
-  _getInitialPlaybackChunkTimeoutMs(track: { seekStartSec?: unknown } | null | undefined) {
+  _getInitialPlaybackChunkTimeoutMs(
+    track: { seekStartSec?: unknown } | null | undefined,
+    options: { hint?: string | null } = { hint: null }
+  ) {
     const seekSec = Math.max(0, Number.parseInt(String(track?.seekStartSec ?? 0), 10) || 0);
-    if (seekSec <= 0) return 8_000;
+    if (seekSec <= 0) {
+      return String(options?.hint ?? '').trim().toLowerCase() === 'skip'
+        ? 4_000
+        : 8_000;
+    }
 
     return Math.min(60_000, 8_000 + (seekSec * 10));
   },

@@ -122,7 +122,7 @@ type RouterReactionPayload = Record<string, unknown> & {
 
 type SessionEventPayload = {
   session?: SessionLookup | null;
-  track?: { title?: string; duration?: string; requestedBy?: string | null; source?: string | null } | null;
+  track?: { title?: string; duration?: string; requestedBy?: string | null; source?: string | null; metadataDeferred?: boolean } | null;
   error?: { message?: string | null } | null;
   reason?: string | null;
   seekRestart?: boolean;
@@ -173,6 +173,14 @@ type SearchReactionState = {
   tracks: unknown[];
   expiresAt: number;
 };
+
+const DEFERRED_TRACK_START_MESSAGE_GRACE_MS = 1200;
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 type RouterLogger = LoggerLike;
 
@@ -565,6 +573,18 @@ export class CommandRouter {
         && String(track?.duration ?? '').trim().toLowerCase() === 'unknown';
       if (isYouTubeMixPlaceholder) {
         return;
+      }
+      if (track?.metadataDeferred === true) {
+        await delay(DEFERRED_TRACK_START_MESSAGE_GRACE_MS);
+        if (track?.metadataDeferred === true) {
+          this.logger?.debug?.('Skipping deferred trackStart popup until metadata is available', {
+            channelId,
+            voiceChannelId: voiceChannelId || null,
+            title: String(track?.title ?? '').trim() || null,
+            duration: String(track?.duration ?? '').trim() || null,
+          });
+          return;
+        }
       }
 
       await this._safeReply(

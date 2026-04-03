@@ -15,6 +15,7 @@ export interface Track {
   title?: string;
   url?: string;
   duration?: string | number;
+  metadataDeferred?: boolean;
   thumbnailUrl?: string | null;
   requestedBy?: UserId;
   source?: string;

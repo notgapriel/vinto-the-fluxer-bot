@@ -26,12 +26,32 @@ type SessionPlayer = {
   currentTrack?: TestTrack | null;
   previewTracks?: (query: string, options?: { requestedBy?: string | null; limit?: number }) => Promise<TestTrack[]>;
   createTrackFromData?: (track: TestTrack, requestedBy: string) => TestTrack;
+  prefetchTrackPlayback?: (track: TestTrack) => Promise<void>;
   enqueueResolvedTracks?: (tracks: TestTrack[], options: { playNext?: boolean; dedupe?: boolean }) => TestTrack[];
   skip?: () => boolean;
   play?: () => Promise<void>;
+  hydrateTrackMetadata?: (track: TestTrack, options?: { requestedBy?: string | null }) => Promise<TestTrack | null>;
 };
 
-function createBaseContext(sessionPlayer: SessionPlayer, calls: string[]) {
+type SessionConnection = {
+  connected?: boolean;
+  connect?: (channelId: string) => Promise<void>;
+  hasUsablePlayer?: () => boolean;
+};
+
+function createBaseContext(sessionPlayer: SessionPlayer, calls: string[], options: { connection?: SessionConnection } = {}) {
+  const connection = {
+    connected: true,
+    async connect(channelId: string) {
+      calls.push(`connect:${channelId}`);
+      connection.connected = true;
+    },
+    hasUsablePlayer() {
+      return true;
+    },
+    ...options.connection,
+  };
+
   return {
     guildId: 'guild-1',
     channelId: 'text-1',
@@ -63,9 +83,7 @@ function createBaseContext(sessionPlayer: SessionPlayer, calls: string[]) {
         calls.push('ensure');
         return {
           guildId: 'guild-1',
-          connection: {
-            connected: true,
-          },
+          connection,
           settings: {
             dedupeEnabled: false,
           },
@@ -379,6 +397,314 @@ test('play does not double-count the first playlist track when background metada
   ]);
   assert.ok(calls.some((entry) => entry.includes('Queued **2/2** playlist tracks.')));
   assert.ok(!calls.some((entry) => entry.includes('Queued **3/2** playlist tracks.')));
+});
+
+test('play starts voice connect and track preview in parallel', async () => {
+  const play = buildPlayCommand();
+  const execute = play?.execute as PlayExecute | undefined;
+  assert.ok(execute);
+
+  const calls: string[] = [];
+  const playerCalls: string[] = [];
+  let resolveConnect: (() => void) | null = null;
+  let resolvePreview: ((tracks: TestTrack[]) => void) | null = null;
+
+  const resolvedTrack = {
+    title: 'Fast Start',
+    duration: '03:05',
+    url: 'https://example.com/fast-start',
+    source: 'youtube',
+  };
+
+  const ctx = createBaseContext({
+    playing: false,
+    async previewTracks() {
+      playerCalls.push('preview:start');
+      return await new Promise<TestTrack[]>((resolve) => {
+        resolvePreview = (tracks) => {
+          playerCalls.push('preview:end');
+          resolve(tracks);
+        };
+      });
+    },
+    createTrackFromData(track: TestTrack, requestedBy: string) {
+      playerCalls.push(`createTrackFromData:${requestedBy}`);
+      return { ...track, requestedBy };
+    },
+    enqueueResolvedTracks(tracks: TestTrack[], options: { playNext?: boolean; dedupe?: boolean }) {
+      playerCalls.push(`enqueue:${JSON.stringify({ playNext: options.playNext, dedupe: options.dedupe })}`);
+      return tracks;
+    },
+    async play() {
+      playerCalls.push('play');
+    },
+    skip() {
+      playerCalls.push('skip');
+      return true;
+    },
+  }, calls, {
+    connection: {
+      connected: false,
+      async connect(channelId: string) {
+        calls.push(`connect:start:${channelId}`);
+        await new Promise<void>((resolve) => {
+          resolveConnect = () => {
+            calls.push(`connect:end:${channelId}`);
+            resolve();
+          };
+        });
+      },
+      hasUsablePlayer() {
+        return true;
+      },
+    },
+  });
+
+  const execution = execute(ctx);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.ok(calls.includes('connect:start:voice-1'));
+  assert.ok(playerCalls.includes('preview:start'));
+  assert.equal(calls.includes('connect:end:voice-1'), false);
+  assert.equal(playerCalls.includes('preview:end'), false);
+
+  const finishPreview = resolvePreview as ((tracks: TestTrack[]) => void) | null;
+  const finishConnect = resolveConnect as (() => void) | null;
+  assert.ok(finishPreview);
+  assert.ok(finishConnect);
+
+  finishPreview?.([resolvedTrack]);
+  finishConnect?.();
+
+  await execution;
+
+  assert.deepEqual(playerCalls, [
+    'preview:start',
+    'preview:end',
+    'createTrackFromData:user-1',
+    'enqueue:{"playNext":false,"dedupe":false}',
+    'play',
+  ]);
+});
+
+test('play prefetches the first track for immediate startup while voice connect is still pending', async () => {
+  const play = buildPlayCommand();
+  const execute = play?.execute as PlayExecute | undefined;
+  assert.ok(execute);
+
+  const calls: string[] = [];
+  const playerCalls: string[] = [];
+  let resolveConnect: (() => void) | null = null;
+  let resolvePrefetch: (() => void) | null = null;
+
+  const resolvedTrack = {
+    title: 'Warm Start',
+    duration: '03:05',
+    url: 'https://www.youtube.com/watch?v=abcdefghijk',
+    source: 'youtube',
+  };
+
+  const ctx = createBaseContext({
+    playing: false,
+    async previewTracks() {
+      playerCalls.push('preview');
+      return [resolvedTrack];
+    },
+    createTrackFromData(track: TestTrack, requestedBy: string) {
+      playerCalls.push(`createTrackFromData:${requestedBy}`);
+      return { ...track, requestedBy };
+    },
+    async prefetchTrackPlayback(track: TestTrack) {
+      playerCalls.push(`prefetch:start:${track.title}`);
+      await new Promise<void>((resolve) => {
+        resolvePrefetch = () => {
+          playerCalls.push(`prefetch:end:${track.title}`);
+          resolve();
+        };
+      });
+    },
+    enqueueResolvedTracks(tracks: TestTrack[], options: { playNext?: boolean; dedupe?: boolean }) {
+      playerCalls.push(`enqueue:${JSON.stringify({ playNext: options.playNext, dedupe: options.dedupe })}`);
+      return tracks;
+    },
+    async play() {
+      playerCalls.push('play');
+    },
+    skip() {
+      playerCalls.push('skip');
+      return true;
+    },
+  }, calls, {
+    connection: {
+      connected: false,
+      async connect(channelId: string) {
+        calls.push(`connect:start:${channelId}`);
+        await new Promise<void>((resolve) => {
+          resolveConnect = () => {
+            calls.push(`connect:end:${channelId}`);
+            resolve();
+          };
+        });
+      },
+      hasUsablePlayer() {
+        return true;
+      },
+    },
+  });
+
+  const execution = execute(ctx);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.ok(calls.includes('connect:start:voice-1'));
+  assert.ok(playerCalls.includes('preview'));
+  assert.ok(playerCalls.includes('prefetch:start:Warm Start'));
+  assert.equal(calls.includes('connect:end:voice-1'), false);
+
+  const finishPrefetch = resolvePrefetch as (() => void) | null;
+  const finishConnect = resolveConnect as (() => void) | null;
+  assert.ok(finishPrefetch);
+  assert.ok(finishConnect);
+
+  finishPrefetch?.();
+  finishConnect?.();
+
+  await execution;
+
+  assert.deepEqual(playerCalls, [
+    'preview',
+    'createTrackFromData:user-1',
+    'prefetch:start:Warm Start',
+    'prefetch:end:Warm Start',
+    'enqueue:{"playNext":false,"dedupe":false}',
+    'play',
+  ]);
+});
+
+test('play uses fast direct YouTube metadata when hydration resolves before the startup grace window', async () => {
+  const play = buildPlayCommand();
+  const execute = play?.execute as PlayExecute | undefined;
+  assert.ok(execute);
+
+  const calls: string[] = [];
+  const playerCalls: string[] = [];
+  let createdTrack: (TestTrack & { metadataDeferred?: boolean }) | null = null;
+
+  const ctx = createBaseContext({
+    playing: false,
+    async previewTracks() {
+      playerCalls.push('previewTracks');
+      return [];
+    },
+    async hydrateTrackMetadata(track: TestTrack, options?: { requestedBy?: string | null }) {
+      playerCalls.push(`hydrate:${track.title}:${options?.requestedBy ?? 'unknown'}`);
+      return {
+        ...track,
+        title: 'Hydrated YouTube Title',
+        duration: '03:33',
+      };
+    },
+    createTrackFromData(track: TestTrack & { metadataDeferred?: boolean }, requestedBy: string) {
+      playerCalls.push(`createTrackFromData:${track.title}:${requestedBy}`);
+      createdTrack = { ...track, requestedBy };
+      return createdTrack;
+    },
+    enqueueResolvedTracks(tracks: TestTrack[], options: { playNext?: boolean; dedupe?: boolean }) {
+      playerCalls.push(`enqueue:${JSON.stringify({ playNext: options.playNext, dedupe: options.dedupe })}`);
+      return tracks;
+    },
+    async play() {
+      playerCalls.push('play');
+    },
+    skip() {
+      playerCalls.push('skip');
+      return true;
+    },
+  }, calls);
+  ctx.args = ['https://www.youtube.com/watch?v=abcdefghijk'];
+
+  await execute(ctx);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(playerCalls.includes('previewTracks'), false);
+  assert.ok(playerCalls.includes('createTrackFromData:Hydrated YouTube Title:user-1'));
+  assert.ok(playerCalls.includes('play'));
+  assert.ok(playerCalls.includes('hydrate:YouTube Track:user-1'));
+  assert.ok(calls.some((entry) => entry.includes('Added to queue: **Hydrated YouTube Title**')));
+  assert.ok(createdTrack);
+  const hydratedTrack = createdTrack as TestTrack;
+  assert.equal(hydratedTrack.title, 'Hydrated YouTube Title');
+  assert.equal(hydratedTrack.duration, '03:33');
+});
+
+test('play falls back to placeholder for direct YouTube URLs and hydrates the queued track in the background when metadata is slow', async () => {
+  const play = buildPlayCommand();
+  const execute = play?.execute as PlayExecute | undefined;
+  assert.ok(execute);
+
+  const calls: string[] = [];
+  const playerCalls: string[] = [];
+  let createdTrack: (TestTrack & { metadataDeferred?: boolean }) | null = null;
+  let resolveHydration: (() => void) | null = null;
+
+  const ctx = createBaseContext({
+    playing: false,
+    async previewTracks() {
+      playerCalls.push('previewTracks');
+      return [];
+    },
+    async hydrateTrackMetadata(track: TestTrack, options?: { requestedBy?: string | null }) {
+      playerCalls.push(`hydrate:start:${track.title}:${options?.requestedBy ?? 'unknown'}`);
+      await new Promise<void>((resolve) => {
+        resolveHydration = resolve;
+      });
+      playerCalls.push(`hydrate:end:${track.title}:${options?.requestedBy ?? 'unknown'}`);
+      return {
+        ...track,
+        title: 'Hydrated Later',
+        duration: '04:04',
+      };
+    },
+    createTrackFromData(track: TestTrack & { metadataDeferred?: boolean }, requestedBy: string) {
+      playerCalls.push(`createTrackFromData:${track.title}:${requestedBy}`);
+      createdTrack = { ...track, requestedBy };
+      return createdTrack;
+    },
+    enqueueResolvedTracks(tracks: TestTrack[], options: { playNext?: boolean; dedupe?: boolean }) {
+      playerCalls.push(`enqueue:${JSON.stringify({ playNext: options.playNext, dedupe: options.dedupe })}`);
+      return tracks;
+    },
+    async play() {
+      playerCalls.push('play');
+    },
+    skip() {
+      playerCalls.push('skip');
+      return true;
+    },
+  }, calls);
+  ctx.args = ['https://www.youtube.com/watch?v=lmnopqrstuv'];
+
+  await execute(ctx);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(playerCalls.includes('previewTracks'), false);
+  assert.ok(playerCalls.includes('createTrackFromData:YouTube Track:user-1'));
+  assert.ok(playerCalls.includes('play'));
+  assert.ok(playerCalls.includes('hydrate:start:YouTube Track:user-1'));
+  assert.ok(createdTrack);
+  assert.equal((createdTrack as TestTrack).title, 'YouTube Track');
+  assert.equal((createdTrack as TestTrack).duration, 'Unknown');
+  assert.ok(calls.some((entry) => entry.includes('Starting playback and resolving track metadata...')));
+  assert.ok(!calls.some((entry) => entry.includes('Added to queue: **YouTube Track** (Unknown)')));
+
+  assert.ok(resolveHydration);
+  const finishHydration = resolveHydration as () => void;
+  finishHydration();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.ok(playerCalls.includes('hydrate:end:YouTube Track:user-1'));
+  assert.equal((createdTrack as TestTrack).title, 'Hydrated Later');
+  assert.equal((createdTrack as TestTrack).duration, '04:04');
+  assert.ok(calls.some((entry) => entry.includes('Added to queue: **Hydrated Later** (04:04)')));
 });
 
 

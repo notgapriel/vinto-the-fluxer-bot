@@ -109,10 +109,14 @@ export function buildYouTubeThumbnailFromUrl(value: unknown) {
 export function normalizeYouTubeVideoUrlFromEntry(entry: unknown) {
   const record = asRecord(entry);
   const webpageUrl = String(record?.webpage_url ?? '').trim();
-  if (webpageUrl && isYouTubeUrl(webpageUrl)) return webpageUrl;
+  if (webpageUrl && isYouTubeUrl(webpageUrl)) {
+    return toCanonicalYouTubeWatchUrl(webpageUrl) ?? webpageUrl;
+  }
 
   const rawUrl = String(record?.url ?? '').trim();
-  if (rawUrl && isYouTubeUrl(rawUrl)) return rawUrl;
+  if (rawUrl && isYouTubeUrl(rawUrl)) {
+    return toCanonicalYouTubeWatchUrl(rawUrl) ?? rawUrl;
+  }
 
   const id = String(record?.id ?? '').trim();
   if (id) return `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`;

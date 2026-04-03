@@ -4,6 +4,7 @@ type TrackFactoryInput = {
   title: string;
   url: string;
   duration: string | number | null | undefined;
+  metadataDeferred?: boolean;
   thumbnailUrl?: string | null;
   requestedBy?: string | null;
   source: string;
@@ -26,6 +27,7 @@ export const trackFactoryMethods = {
     title,
     url,
     duration,
+    metadataDeferred = false,
     thumbnailUrl = null,
     requestedBy,
     source,
@@ -51,6 +53,7 @@ export const trackFactoryMethods = {
       title: title || 'Unknown title',
       url,
       duration: toDurationLabel(duration),
+      metadataDeferred: Boolean(metadataDeferred),
       thumbnailUrl: normalizedThumbnail,
       requestedBy,
       source,

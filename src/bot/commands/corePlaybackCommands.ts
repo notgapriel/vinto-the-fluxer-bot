@@ -8,6 +8,8 @@ import {
   buildHelpPages,
   parseVoiceChannelArgument,
   ensureGuild,
+  prepareSessionConnection,
+  connectPreparedSession,
   ensureConnectedSession,
   ensureDjAccess,
   userHasDjAccess,
@@ -44,6 +46,8 @@ import type { EmbedField, MessagePayload } from '../../types/core.ts';
 import type { CommandContextLike, SessionLike, TrackDataLike } from './helpers/types.ts';
 
 const RADIO_RECOGNITION_SUPPORT_FOOTER = 'Radio recognition costs money to run. Support: https://ko-fi.com/Q5Q31VDH1Z';
+const DIRECT_YOUTUBE_METADATA_GRACE_MS = 150;
+const DIRECT_YOUTUBE_MESSAGE_GRACE_MS = 500;
 
 type SearchTrack = { title?: string | null; duration?: string | null; thumbnailUrl?: string | null };
 type SentMessageLike = { id?: string | null; message?: { id?: string | null } | null };
@@ -98,6 +102,103 @@ function toCanonicalYouTubeWatchUrlFromValue(value: string | null | undefined) {
   }
 }
 
+function buildDeferredDirectYouTubeTrack(query: string, requestedBy: string | null): TrackDataLike | null {
+  const watchUrl = toCanonicalYouTubeWatchUrlFromValue(query);
+  if (!watchUrl) return null;
+
+  return {
+    title: 'YouTube Track',
+    url: watchUrl,
+    duration: 'Unknown',
+    requestedBy,
+    source: 'youtube',
+    metadataDeferred: true,
+  };
+}
+
+function isDeferredTrackMetadata(track: TrackDataLike | null | undefined) {
+  return track?.metadataDeferred === true;
+}
+
+function buildDeferredPlaybackStatusText(options: {
+  shouldInterruptLivePlayback: boolean;
+  addedCount: number;
+  isPlaylistLoad: boolean;
+}) {
+  const { shouldInterruptLivePlayback, addedCount, isPlaylistLoad } = options;
+  if (isPlaylistLoad && addedCount > 1) {
+    return shouldInterruptLivePlayback
+      ? 'Stopped live stream and started playlist playback. Resolving track metadata...'
+      : 'Started playlist playback. Resolving track metadata...';
+  }
+
+  return shouldInterruptLivePlayback
+    ? 'Stopped live stream. Starting playback and resolving track metadata...'
+    : 'Starting playback and resolving track metadata...';
+}
+
+function buildResolvedPlaybackStatusText(options: {
+  shouldInterruptLivePlayback: boolean;
+  addedCount: number;
+  firstTrack: TrackDataLike;
+}) {
+  const { shouldInterruptLivePlayback, addedCount, firstTrack } = options;
+  if (shouldInterruptLivePlayback && addedCount === 1) {
+    return `Stopped live stream. Playing now: ${trackLabel(firstTrack)}`;
+  }
+  if (shouldInterruptLivePlayback) {
+    return `Stopped live stream and queued **${addedCount}** tracks to start now.`;
+  }
+  if (addedCount === 1) {
+    return `Added to queue: ${trackLabel(firstTrack)}`;
+  }
+  return `Added **${addedCount}** tracks from playlist.`;
+}
+
+function wait(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function waitForDeferredTrackMessageMetadata(
+  track: TrackDataLike | null | undefined,
+  hydrationPromise: Promise<TrackDataLike | null> | null,
+) {
+  if (!track || !hydrationPromise || track.metadataDeferred !== true) return null;
+  const hydrated = await Promise.race<TrackDataLike | null>([
+    hydrationPromise,
+    wait(DIRECT_YOUTUBE_MESSAGE_GRACE_MS).then(() => null),
+  ]);
+  return hydrateDeferredTrackMetadata(track, hydrated);
+}
+
+async function finalizeDeferredPlaybackStatus(
+  progress: {
+    success: (text: string, fields?: EmbedField[] | null) => Promise<unknown>;
+  },
+  options: {
+    shouldInterruptLivePlayback: boolean;
+    addedCount: number;
+    firstTrack: TrackDataLike;
+  },
+) {
+  const { shouldInterruptLivePlayback, addedCount, firstTrack } = options;
+  const text = buildResolvedPlaybackStatusText({ shouldInterruptLivePlayback, addedCount, firstTrack });
+
+  if (shouldInterruptLivePlayback && addedCount > 1) {
+    await progress.success(text, [{ name: 'First Track', value: trackLabel(firstTrack) }]);
+    return;
+  }
+
+  if (!shouldInterruptLivePlayback && addedCount > 1) {
+    await progress.success(text, [{ name: 'First Track', value: trackLabel(firstTrack) }]);
+    return;
+  }
+
+  await progress.success(text);
+}
+
 async function hydrateFirstYouTubeMixTrack(
   player: SessionLike['player'],
   track: TrackDataLike | null | undefined,
@@ -120,6 +221,54 @@ async function hydrateFirstYouTubeMixTrack(
   if (preservedId) targetTrack.id = preservedId;
   if (typeof preservedQueuedAt === 'number') targetTrack.queuedAt = preservedQueuedAt;
   return targetTrack;
+}
+
+async function hydrateDeferredTrackMetadata(
+  track: TrackDataLike | null | undefined,
+  hydrated: TrackDataLike | null | undefined,
+) {
+  if (!track || !hydrated) return null;
+
+  const targetTrack = track;
+  const preservedId = targetTrack.id ?? null;
+  const preservedQueuedAt = targetTrack.queuedAt ?? null;
+  const preservedRequestedBy = targetTrack.requestedBy ?? hydrated.requestedBy ?? null;
+  const preservedSeekStartSec = Number.parseInt(String(targetTrack.seekStartSec ?? 0), 10) || 0;
+
+  Object.assign(targetTrack, hydrated);
+  if (preservedId) targetTrack.id = preservedId;
+  if (typeof preservedQueuedAt === 'number') targetTrack.queuedAt = preservedQueuedAt;
+  if (preservedRequestedBy) targetTrack.requestedBy = preservedRequestedBy;
+  targetTrack.seekStartSec = preservedSeekStartSec;
+  delete targetTrack.metadataDeferred;
+  return targetTrack;
+}
+
+async function resolveAndHydrateDeferredTrackMetadata(
+  player: SessionLike['player'],
+  track: TrackDataLike | null | undefined,
+  requestedBy: string | null,
+) {
+  if (!track) return null;
+  const hydrated = await player.hydrateTrackMetadata?.(track, { requestedBy }).catch(() => null);
+  return hydrateDeferredTrackMetadata(track, hydrated);
+}
+
+async function prepareTracksForPlaybackStart(
+  player: SessionLike['player'],
+  preview: TrackDataLike[],
+  requestedBy: string | null,
+  options: { prefetchFirstTrack?: boolean } = { prefetchFirstTrack: false },
+) {
+  const tracks = preview.map((track: TrackDataLike) => player.createTrackFromData(track, requestedBy));
+  const firstTrack = tracks[0] ?? null;
+  const firstTrackHydrationPromise = isYouTubeMixPlaceholderTrack(firstTrack)
+    ? hydrateFirstYouTubeMixTrack(player, firstTrack, requestedBy).catch(() => null)
+    : null;
+  if (options.prefetchFirstTrack && firstTrack) {
+    await player.prefetchTrackPlayback?.(firstTrack).catch(() => null);
+  }
+  return { tracks, firstTrackHydrationPromise };
 }
 
 function resolveGatewayLatencyMs(gateway: GatewayLike) {
@@ -445,16 +594,39 @@ registry.register(createCommand({
       await ctx.withGuildOpLock('play', async () => {
         const progress = await createProgressReporter(ctx, `Looking up: **${query}**`, null, null, { replyReference: true });
         await ctx.safeTyping();
-        const session = await ensureConnectedSession(ctx, explicitChannelId);
+        const preparedSession = await prepareSessionConnection(ctx, explicitChannelId);
+        const shouldLoadPlaylistInBackground = isLikelyPlaylistLoad(query);
+        const directYouTubeTrack = shouldLoadPlaylistInBackground
+          ? null
+          : buildDeferredDirectYouTubeTrack(query, ctx.authorId);
+        const connectPromise = connectPreparedSession(ctx, preparedSession);
+        const directTrackHydrationPromise = directYouTubeTrack
+          ? (preparedSession.session.player.hydrateTrackMetadata?.(directYouTubeTrack, { requestedBy: ctx.authorId }).catch(() => null) ?? Promise.resolve(null))
+          : null;
+        const previewPromise = directYouTubeTrack
+          ? Promise.race<TrackDataLike | null>([
+              directTrackHydrationPromise ?? Promise.resolve(null),
+              (async () => {
+                await connectPromise.catch(() => null);
+                await wait(DIRECT_YOUTUBE_METADATA_GRACE_MS);
+                return null;
+              })(),
+            ]).then((hydrated) => [hydrated ?? directYouTubeTrack])
+          : preparedSession.session.player.previewTracks(query, {
+              requestedBy: ctx.authorId,
+              ...(shouldLoadPlaylistInBackground ? { limit: 1 } : (ctx.config.maxPlaylistTracks != null ? { limit: ctx.config.maxPlaylistTracks } : {})),
+            });
+        const preparedTracksPromise = previewPromise.then((preview) => prepareTracksForPlaybackStart(
+          preparedSession.session.player,
+          preview,
+          ctx.authorId,
+          { prefetchFirstTrack: !preparedSession.session.player.playing }
+        ));
+        const [session, preparedTracks] = await Promise.all([connectPromise, preparedTracksPromise]);
+        const { tracks, firstTrackHydrationPromise } = preparedTracks;
         await applyVoiceProfileIfConfigured(ctx, session, explicitChannelId);
 
         const queueGuard = await resolveQueueGuard(ctx);
-        const shouldLoadPlaylistInBackground = isLikelyPlaylistLoad(query);
-        const preview = await session.player.previewTracks(query, {
-          requestedBy: ctx.authorId,
-          ...(shouldLoadPlaylistInBackground ? { limit: 1 } : (ctx.config.maxPlaylistTracks != null ? { limit: ctx.config.maxPlaylistTracks } : {})),
-        });
-        const tracks = preview.map((track: TrackDataLike) => session.player.createTrackFromData(track, ctx.authorId));
         const activeTrack = session.player.currentTrack ?? null;
         const shouldInterruptLivePlayback = Boolean(
           session.player.playing
@@ -492,21 +664,36 @@ registry.register(createCommand({
           return;
         }
 
+        await waitForDeferredTrackMessageMetadata(firstAdded, directTrackHydrationPromise);
+        const shouldDelayFinalPlaybackMessage = isDeferredTrackMetadata(firstAdded);
+
+        if (directTrackHydrationPromise) {
+          void directTrackHydrationPromise.then(async (hydrated) => {
+            const resolvedTrack = await hydrateDeferredTrackMetadata(firstAdded, hydrated);
+            if (!resolvedTrack || !shouldDelayFinalPlaybackMessage || shouldLoadPlaylistInBackground) return;
+            await finalizeDeferredPlaybackStatus(progress, {
+              shouldInterruptLivePlayback,
+              addedCount: added.length,
+              firstTrack: resolvedTrack,
+            }).catch(() => null);
+          });
+        } else {
+          void resolveAndHydrateDeferredTrackMetadata(session.player, firstAdded, ctx.authorId);
+        }
+
         if (!shouldLoadPlaylistInBackground) {
-          if (shouldInterruptLivePlayback && added.length === 1) {
-            await progress.success(`Stopped live stream. Playing now: ${trackLabel(firstAdded)}`);
-          } else if (shouldInterruptLivePlayback) {
-            await progress.success(
-              `Stopped live stream and queued **${added.length}** tracks to start now.`,
-              [{ name: 'First Track', value: trackLabel(firstAdded) }]
-            );
-          } else if (added.length === 1) {
-            await progress.success(`Added to queue: ${trackLabel(firstAdded)}`);
+          if (shouldDelayFinalPlaybackMessage) {
+            await progress.info(buildDeferredPlaybackStatusText({
+              shouldInterruptLivePlayback,
+              addedCount: added.length,
+              isPlaylistLoad: added.length > 1,
+            }));
           } else {
-            await progress.success(
-              `Added **${added.length}** tracks from playlist.`,
-              [{ name: 'First Track', value: trackLabel(firstAdded) }]
-            );
+            await finalizeDeferredPlaybackStatus(progress, {
+              shouldInterruptLivePlayback,
+              addedCount: added.length,
+              firstTrack: firstAdded,
+            });
           }
           return;
         }
@@ -514,19 +701,29 @@ registry.register(createCommand({
         let firstTrackLabel = trackLabel(firstAdded);
         const requestedBy = ctx.authorId;
         const maxPlaylistTracks = ctx.config.maxPlaylistTracks;
+        if (isYouTubeMixPlaceholderTrack(firstAdded) && firstTrackHydrationPromise) {
+          await Promise.race([
+            firstTrackHydrationPromise.catch(() => null),
+            wait(DIRECT_YOUTUBE_METADATA_GRACE_MS),
+          ]);
+          firstTrackLabel = trackLabel(firstAdded);
+        }
         await progress.info(
           shouldInterruptLivePlayback
             ? `Stopped live stream. Playing now: ${firstTrackLabel}\nLoading remaining playlist tracks in the background...`
             : `Playing now: ${firstTrackLabel}\nLoading remaining playlist tracks in the background...`
         );
 
-        const initialPreviewTrack = preview[0] ?? null;
+        const initialPreviewTrack = tracks[0] ?? null;
         void (async () => {
           let resolved: TrackDataLike[] | null = null;
           let remainingResolved: TrackDataLike[] | null = null;
           let remainingTracks: TrackDataLike[] | null = null;
           try {
-            const hydratedFirstTrack = await hydrateFirstYouTubeMixTrack(session.player, firstAdded, requestedBy).catch(() => null);
+            const hydratedFirstTrack = await (
+              firstTrackHydrationPromise
+              ?? hydrateFirstYouTubeMixTrack(session.player, firstAdded, requestedBy).catch(() => null)
+            );
             if (hydratedFirstTrack) {
               firstTrackLabel = trackLabel(hydratedFirstTrack);
               await progress.info(
@@ -743,6 +940,9 @@ registry.register(createCommand({
         await applyVoiceProfileIfConfigured(ctx, session);
         const queueGuard = await resolveQueueGuard(ctx);
         const track = session.player.createTrackFromData(selected, ctx.authorId);
+        if (!session.player.playing) {
+          await session.player.prefetchTrackPlayback?.(track).catch(() => null);
+        }
         const added = session.player.enqueueResolvedTracks([track], {
           dedupe: session.settings.dedupeEnabled,
           queueGuard,

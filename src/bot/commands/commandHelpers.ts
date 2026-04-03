@@ -34,6 +34,7 @@ export {
 
 export {
   applyVoiceProfileIfConfigured,
+  connectPreparedSession,
   computeVoteSkipRequirement,
   ensureConnectedSession,
   ensureGuild,
@@ -41,6 +42,7 @@ export {
   getGuildConfigOrThrow,
   getSessionOrThrow,
   isUserInPlaybackChannel,
+  prepareSessionConnection,
   requireLibrary,
   resolveActiveVoiceChannelOrThrow,
   resolveQueueGuard,
