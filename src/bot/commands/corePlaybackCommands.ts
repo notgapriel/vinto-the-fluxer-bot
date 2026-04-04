@@ -123,6 +123,26 @@ function buildDeferredDirectYouTubeTrack(query: string, requestedBy: string | nu
   };
 }
 
+function normalizeRadioMatchValue(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function isSameRadioSelection(
+  track: TrackDataLike | null | undefined,
+  station: Pick<ResolvedRadioStation, 'name' | 'url'> | null | undefined,
+): boolean {
+  if (!track || !station) return false;
+  if (String(track.source ?? '').trim().toLowerCase() !== 'radio-stream') return false;
+
+  const trackUrl = normalizeRadioMatchValue(track.url);
+  const stationUrl = normalizeRadioMatchValue(station.url);
+  if (trackUrl && stationUrl && trackUrl === stationUrl) return true;
+
+  const trackTitle = normalizeRadioMatchValue(track.title);
+  const stationName = normalizeRadioMatchValue(station.name);
+  return Boolean(trackTitle && stationName && trackTitle === stationName);
+}
+
 function isDeferredTrackMetadata(track: TrackDataLike | null | undefined) {
   return track?.metadataDeferred === true;
 }
@@ -614,6 +634,7 @@ registry.register(createCommand({
         return;
       }
 
+      let targetStation: ResolvedRadioStation | null = null;
       let targetLabel = rawQuery;
       let targetUrl = rawQuery;
       if (!/^https?:\/\//i.test(rawQuery)) {
@@ -628,6 +649,7 @@ registry.register(createCommand({
             );
             return;
           }
+          targetStation = randomStation;
           targetLabel = randomStation.name;
           targetUrl = randomStation.url;
         } else if (/^\d+$/.test(rawQuery)) {
@@ -641,6 +663,7 @@ registry.register(createCommand({
             return;
           }
 
+          targetStation = indexed.station;
           targetLabel = indexed.station.name;
           targetUrl = indexed.station.url;
         } else {
@@ -656,6 +679,7 @@ registry.register(createCommand({
             return;
           }
 
+          targetStation = selection.station;
           targetLabel = selection.station.name;
           targetUrl = selection.station.url;
         }
@@ -688,6 +712,21 @@ registry.register(createCommand({
         await applyVoiceProfileIfConfigured(ctx, session);
 
         const activeTrack = session.player.currentTrack ?? null;
+        const resolvedStation = targetStation ?? {
+          name: targetLabel,
+          url: String(resolved.url ?? targetUrl).trim() || targetUrl,
+        };
+        const queuedRadioDuplicate = Array.isArray(session.player.pendingTracks)
+          ? session.player.pendingTracks.find((track) => isSameRadioSelection(track, resolvedStation))
+          : null;
+        if (isSameRadioSelection(activeTrack, resolvedStation)) {
+          await progress.info(`Already tuned into ${trackLabel(activeTrack ?? resolved)}.`);
+          return;
+        }
+        if (queuedRadioDuplicate) {
+          await progress.info(`That station is already queued next: ${trackLabel(queuedRadioDuplicate)}.`);
+          return;
+        }
         const shouldInterruptLivePlayback = Boolean(
           session.player.playing
           && activeTrack

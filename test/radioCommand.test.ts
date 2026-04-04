@@ -436,3 +436,305 @@ test('radio command resolves keyword searches to the best matching station', asy
 
   assert.equal(previewQuery, 'https://somafm.com/groovesalad.pls');
 });
+
+test('radio command does not restart the same station when it is already playing', async () => {
+  const registry = buildRegistry();
+  const radio = registry.resolve('radio');
+  const execute = radio?.execute as Execute | undefined;
+  assert.ok(execute);
+
+  const playerCalls: string[] = [];
+  const replyCalls: string[] = [];
+
+  await execute({
+    guildId: '1474874137937518680',
+    channelId: 'text-1',
+    authorId: 'user-1',
+    args: ['BAYERN 3'],
+    prefix: '#',
+    config: {
+      prefix: '#',
+      enableEmbeds: true,
+      maxConcurrentVoiceChannelsPerGuild: 5,
+    },
+    message: {
+      id: 'message-1',
+      guild_id: '1474874137937518680',
+      author: { id: 'user-1' },
+    },
+    guildConfig: {
+      guildId: '1474874137937518680',
+      prefix: '#',
+      settings: {
+        dedupeEnabled: false,
+        stayInVoiceEnabled: false,
+        volumePercent: 100,
+        voteSkipRatio: 0.5,
+        voteSkipMinVotes: 1,
+        djRoleIds: [],
+        musicLogChannelId: null,
+      },
+    },
+    library: {
+      async listGuildStations() {
+        return [];
+      },
+    },
+    voiceStateStore: {
+      resolveMemberVoiceChannel() {
+        return 'voice-1';
+      },
+      countUsersInChannel() {
+        return 1;
+      },
+    },
+    sessions: {
+      has() {
+        return false;
+      },
+      listByGuild() {
+        return [];
+      },
+      async ensure() {
+        return {
+          guildId: '1474874137937518680',
+          sessionId: 'session-1',
+          connection: {
+            connected: true,
+            async connect() {},
+            hasUsablePlayer() {
+              return true;
+            },
+          },
+          settings: {
+            dedupeEnabled: false,
+            stayInVoiceEnabled: false,
+            voteSkipRatio: 0.5,
+            voteSkipMinVotes: 1,
+            djRoleIds: new Set<string>(),
+          },
+          player: {
+            playing: true,
+            currentTrack: {
+              title: 'BAYERN 3',
+              duration: 'Live',
+              url: 'https://streams.br.de/bayern3_2.m3u',
+              source: 'radio-stream',
+              isLive: true,
+            },
+            pendingTracks: [],
+            async previewTracks(query: string) {
+              playerCalls.push(`preview:${query}`);
+              return [{
+                title: 'BAYERN 3',
+                duration: 'Live',
+                url: 'https://streams.br.de/bayern3_2.m3u',
+                source: 'radio-stream',
+                isLive: true,
+              }];
+            },
+            createTrackFromData(track: Record<string, unknown>, requestedBy: string) {
+              playerCalls.push(`create:${requestedBy}`);
+              return { ...track, requestedBy };
+            },
+            enqueueResolvedTracks(tracks: Record<string, unknown>[]) {
+              playerCalls.push(`enqueue:${tracks.length}`);
+              return tracks;
+            },
+            async play() {
+              playerCalls.push('play');
+            },
+            skip() {
+              playerCalls.push('skip');
+              return true;
+            },
+          },
+        };
+      },
+      bindTextChannel() {},
+      applyGuildConfig() {},
+      async destroy() {},
+      adoptVoiceChannel() {},
+      async syncPersistentVoiceState() {},
+      markSnapshotDirty() {},
+    },
+    rest: {
+      async sendMessage() {
+        return { id: 'progress-1' };
+      },
+      async editMessage(_channelId: string, _messageId: string, payload: { embeds?: Array<{ description?: string }>; content?: string }) {
+        replyCalls.push(payload?.embeds?.[0]?.description ?? payload?.content ?? '');
+        return { id: 'progress-1' };
+      },
+    },
+    reply: {
+      async info() {},
+      async success() {},
+      async warning() {},
+      async error() {},
+    },
+    async safeTyping() {},
+    async withGuildOpLock(_label: string, task: () => Promise<unknown>) {
+      return task();
+    },
+  });
+
+  assert.ok(playerCalls.includes('preview:https://streams.br.de/bayern3_2.m3u'));
+  assert.ok(!playerCalls.includes('play'));
+  assert.ok(!playerCalls.includes('skip'));
+  assert.ok(replyCalls.some((value) => value.includes('Already tuned into')));
+});
+
+test('radio command does not queue the same station twice when it is already pending', async () => {
+  const registry = buildRegistry();
+  const radio = registry.resolve('radio');
+  const execute = radio?.execute as Execute | undefined;
+  assert.ok(execute);
+
+  const playerCalls: string[] = [];
+  const replyCalls: string[] = [];
+
+  await execute({
+    guildId: '1474874137937518680',
+    channelId: 'text-1',
+    authorId: 'user-1',
+    args: ['BAYERN 3'],
+    prefix: '#',
+    config: {
+      prefix: '#',
+      enableEmbeds: true,
+      maxConcurrentVoiceChannelsPerGuild: 5,
+    },
+    message: {
+      id: 'message-1',
+      guild_id: '1474874137937518680',
+      author: { id: 'user-1' },
+    },
+    guildConfig: {
+      guildId: '1474874137937518680',
+      prefix: '#',
+      settings: {
+        dedupeEnabled: false,
+        stayInVoiceEnabled: false,
+        volumePercent: 100,
+        voteSkipRatio: 0.5,
+        voteSkipMinVotes: 1,
+        djRoleIds: [],
+        musicLogChannelId: null,
+      },
+    },
+    library: {
+      async listGuildStations() {
+        return [];
+      },
+    },
+    voiceStateStore: {
+      resolveMemberVoiceChannel() {
+        return 'voice-1';
+      },
+      countUsersInChannel() {
+        return 1;
+      },
+    },
+    sessions: {
+      has() {
+        return false;
+      },
+      listByGuild() {
+        return [];
+      },
+      async ensure() {
+        return {
+          guildId: '1474874137937518680',
+          sessionId: 'session-1',
+          connection: {
+            connected: true,
+            async connect() {},
+            hasUsablePlayer() {
+              return true;
+            },
+          },
+          settings: {
+            dedupeEnabled: false,
+            stayInVoiceEnabled: false,
+            voteSkipRatio: 0.5,
+            voteSkipMinVotes: 1,
+            djRoleIds: new Set<string>(),
+          },
+          player: {
+            playing: true,
+            currentTrack: {
+              title: 'Other Station',
+              duration: 'Live',
+              url: 'https://example.com/other',
+              source: 'radio-stream',
+              isLive: true,
+            },
+            pendingTracks: [{
+              title: 'BAYERN 3',
+              duration: 'Live',
+              url: 'https://streams.br.de/bayern3_2.m3u',
+              source: 'radio-stream',
+              isLive: true,
+            }],
+            async previewTracks(query: string) {
+              playerCalls.push(`preview:${query}`);
+              return [{
+                title: 'BAYERN 3',
+                duration: 'Live',
+                url: 'https://streams.br.de/bayern3_2.m3u',
+                source: 'radio-stream',
+                isLive: true,
+              }];
+            },
+            createTrackFromData(track: Record<string, unknown>, requestedBy: string) {
+              playerCalls.push(`create:${requestedBy}`);
+              return { ...track, requestedBy };
+            },
+            enqueueResolvedTracks(tracks: Record<string, unknown>[]) {
+              playerCalls.push(`enqueue:${tracks.length}`);
+              return tracks;
+            },
+            async play() {
+              playerCalls.push('play');
+            },
+            skip() {
+              playerCalls.push('skip');
+              return true;
+            },
+          },
+        };
+      },
+      bindTextChannel() {},
+      applyGuildConfig() {},
+      async destroy() {},
+      adoptVoiceChannel() {},
+      async syncPersistentVoiceState() {},
+      markSnapshotDirty() {},
+    },
+    rest: {
+      async sendMessage() {
+        return { id: 'progress-1' };
+      },
+      async editMessage(_channelId: string, _messageId: string, payload: { embeds?: Array<{ description?: string }>; content?: string }) {
+        replyCalls.push(payload?.embeds?.[0]?.description ?? payload?.content ?? '');
+        return { id: 'progress-1' };
+      },
+    },
+    reply: {
+      async info() {},
+      async success() {},
+      async warning() {},
+      async error() {},
+    },
+    async safeTyping() {},
+    async withGuildOpLock(_label: string, task: () => Promise<unknown>) {
+      return task();
+    },
+  });
+
+  assert.ok(playerCalls.includes('preview:https://streams.br.de/bayern3_2.m3u'));
+  assert.ok(!playerCalls.includes('play'));
+  assert.ok(!playerCalls.includes('skip'));
+  assert.ok(replyCalls.some((value) => value.includes('already queued next')));
+});
