@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.2] - 2026-04-06
+
+- Playback and session resilience:
+  - improved voice connection session handling, connection checks, room cleanup, and disconnect behavior
+  - added PCM input backpressure handling and tracked source-process closure details to surface unexpected terminations
+  - hardened playback startup error handling, including yt-dlp cookie management and richer timeout logging
+  - added automatic YouTube track recovery after early source closure and retry behavior after startup audio timeouts
+  - added prefetched and deferred YouTube metadata/startup handling to reduce startup stalls
+  - suppressed restored-session `trackStart` popups so persistent session recovery resumes more quietly
+  - reduced session snapshot write interval to 1000ms and improved track management around persisted sessions
+- Radio and command UX:
+  - added a `radio` command for saving, listing, and starting radio station presets
+  - prevented the same radio station from being restarted or queued again while it is already playing or pending
+  - improved playback command error handling and track management feedback
+- Metrics, tooling, and configuration:
+  - added session memory telemetry and heap snapshot support for runtime diagnostics
+  - switched the test command to the `run-tests.mjs` runner for more reliable discovery
+  - migrated the project package management flow to pnpm and updated related configuration
+  - updated documented environment variables and removed deprecated session panel references
+- Tests:
+  - added regression coverage for voice connection cleanup and disconnect behavior
+  - added coverage for session memory telemetry lifecycle counters
+  - added recovery coverage for early-ended YouTube tracks
+
 ## [0.5.1] - 2026-03-22
 
 - Playlist startup and queue UX:
@@ -35,6 +59,13 @@ All notable changes to this project are documented in this file.
 - Runtime cleanup:
   - disabled the legacy session panel runtime path
   - added a guild-level limit for concurrent voice-channel sessions
+- Access, configuration, and operational behavior:
+  - added a guild default volume command and persisted per-guild player volume for new sessions
+  - hardened permission management with role-based fallbacks, guild-state caching, and clearer channel-context errors
+  - stopped retrying known non-retryable server errors
+  - migrated the bot runtime to TypeScript and updated Docker startup to build TypeScript output before launch
+  - cached short-link normalization, cached global guild/user counts, and added reaction cleanup after pagination/search picks
+  - added unhealthy-exit runtime monitoring, Deezer stream timeout/cache tuning, max-pending-track limits, and periodic ephemeral-state cleanup
 - Tests:
   - added regression coverage for multi-session shutdown recovery ordering, snapshot persistence, missing-channel cleanup, and voice-channel-scoped 24/7 behavior
 
@@ -58,6 +89,12 @@ All notable changes to this project are documented in this file.
   - reduced default MongoDB pool sizing for smaller deployments
   - added conservative Docker/Node memory defaults for self-hosted runtime stability
   - stopped retrying unsafe REST message sends automatically to avoid duplicate bot messages on client-side timeouts
+- Deployment and container tooling:
+  - added Coolify compose support and expanded Docker environment handling for yt-dlp client selection, extra arguments, and cookies files
+  - switched Docker yt-dlp installation to standalone downloads/curl-based setup for more reliable Linux builds
+  - added runtime support for extra yt-dlp arguments and improved Docker playback error messages
+- Maintenance:
+  - bumped `@sentry/node` to `10.43.0`
 - Tests:
   - added regression coverage for HTTP audio vs radio classification, HLS resolver fallback, yt-dlp seek startup, and radio now-playing fallback behavior
 
@@ -165,6 +202,10 @@ All notable changes to this project are documented in this file.
 
 ## [0.4.1] - 2026-03-05
 
+- Queue/session flow fixes:
+  - improved session validation and track display handling during command routing
+  - prevented `queueEmpty` announcements while playback is still active
+  - restored YouTube search priority in the affected fallback path
 - Lyrics matching reliability:
   - improved `lyrics` fallback to use `artist - title` for the current track instead of title-only lookups
   - added artist metadata propagation for YouTube and stored tracks so lyrics requests have better context
@@ -210,12 +251,25 @@ All notable changes to this project are documented in this file.
   - added thumbnail propagation from resolver sources through storage and embeds
   - updated `now` and session panel embeds to use track thumbnails/images when available
   - set a default gateway presence/activity at startup and on resume
+- Configuration and platform hardening:
+  - added gateway-only mode, configurable gateway intents, and MongoDB health checks
+  - improved session idle management and permission handling with REST role fallback tests
+  - hardened REST client rate-limit behavior and member-count handling
+- Maintenance:
+  - bumped `@livekit/rtc-node`, `mongodb`, `dotenv`, and `@sentry/node`
+  - refreshed README badges/funding metadata and streamlined feature overview
 - Tests:
   - updated config permission/config store tests after autoplay removal
   - added thumbnail pipeline coverage
 
 ## [0.2.0] - 2026-02-25
 
+- Initial bot foundation:
+  - shipped the first production-ready Fluxer music bot runtime with core playback, queue, and session management
+  - improved help output, enforced config permissions, and enhanced command replies with message references and cleaner payloads
+  - added guild features, user profile commands, global guild/user counting, ping latency measurement, and improved heartbeat handling
+  - hardened cold-start voice channel detection, YouTube fallback handling with yt-dlp cookies, seek/logging behavior, and YouTube Music URL normalization
+  - added proxy environment sanitization and API connectivity verification for safer deployment defaults
 - Repository governance and release hardening:
   - improved README and architecture/configuration docs
   - added contribution and security policies

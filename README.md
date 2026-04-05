@@ -93,7 +93,7 @@ corepack enable
 Then install dependencies and create your env file:
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 cp .env.example .env
 ```
 
@@ -122,6 +122,8 @@ Useful commands:
 | --- | --- |
 | Start | `pnpm start` |
 | Dev mode | `pnpm dev` |
+| Build | `pnpm run build` |
+| Typecheck | `pnpm run typecheck` |
 | Tests | `pnpm test` |
 | Spotify token helper | `pnpm spotify:token` |
 
