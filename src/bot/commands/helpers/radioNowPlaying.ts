@@ -359,9 +359,12 @@ async function detectWithAudD(url: string, apiToken: string | null): Promise<Rad
   const form = new FormData();
   form.set('api_token', apiToken);
   form.set('return', 'apple_music,spotify');
+  // Copy Buffer data into a plain Uint8Array so Blob typing stays compatible across newer Node/TS lib definitions.
+  const uploadBytes = new Uint8Array(sample.bytes.length);
+  uploadBytes.set(sample.bytes);
   form.set(
     'file',
-    new Blob([sample.bytes], { type: sample.contentType }),
+    new Blob([uploadBytes], { type: sample.contentType }),
     'radio-sample.mp3'
   );
 
