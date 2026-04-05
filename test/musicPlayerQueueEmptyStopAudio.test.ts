@@ -325,6 +325,58 @@ test('play() uses a more tolerant YouTube startup timeout for the next track aft
   assert.equal(startupTimeoutMs, 10_000);
 });
 
+test('play() retries a skipped-to YouTube track once with a longer startup timeout after an initial audio timeout', async () => {
+  const voice = createVoice();
+  const player = new MusicPlayer(voice, {});
+  const startupTimeouts: number[] = [];
+  let youtubePipelineStarts = 0;
+  let trackErrorCount = 0;
+  let queueEmptyCount = 0;
+
+  player.nextPlaybackStartupHint = 'skip';
+  player._startYouTubePipeline = async () => {
+    youtubePipelineStarts += 1;
+    player.ffmpeg = {
+      stdout: {
+        pipe() {},
+      },
+      once() {},
+      stderr: new PassThrough(),
+    } as unknown as typeof player.ffmpeg;
+  };
+  player._awaitInitialPlaybackChunk = async (_stream: unknown, _proc: unknown, timeoutMs: number) => {
+    startupTimeouts.push(timeoutMs);
+    if (startupTimeouts.length === 1) {
+      throw new Error('Playback pipeline did not produce audio output in time.');
+    }
+  };
+
+  player.on('trackError', () => {
+    trackErrorCount += 1;
+  });
+  player.on('queueEmpty', () => {
+    queueEmptyCount += 1;
+  });
+
+  player.enqueueResolvedTracks([
+    player._buildTrack({
+      title: 'Retry Track',
+      url: 'https://www.youtube.com/watch?v=QX_VR_Wshvk',
+      duration: '03:00',
+      source: 'youtube',
+      requestedBy: 'user-1',
+    }),
+  ]);
+
+  await player.play();
+
+  assert.deepEqual(startupTimeouts, [10_000, 22_000]);
+  assert.equal(youtubePipelineStarts, 2);
+  assert.equal(trackErrorCount, 1);
+  assert.equal(queueEmptyCount, 0);
+  assert.equal(player.currentTrack?.title, 'Retry Track');
+});
+
 test('play() ignores a prefetched YouTube stream URL by default and uses yt-dlp startup instead', async () => {
   const voice = createVoice();
   const player = new MusicPlayer(voice, {});
@@ -377,6 +429,61 @@ test('play() ignores a prefetched YouTube stream URL by default and uses yt-dlp 
 
   assert.equal(startedUrl, null);
   assert.equal(youtubePipelineStarts, 1);
+});
+
+test('play() uses a prefetched YouTube stream URL for skip transitions even when general prefetched playback is disabled', async () => {
+  const voice = createVoice();
+  const player = new MusicPlayer(voice, {});
+  let startedUrl: string | null = null;
+  let youtubePipelineStarts = 0;
+
+  player.nextPlaybackStartupHint = 'skip';
+  player._scheduleNextTrackPrefetch = () => {};
+  player._startHttpUrlPipeline = async (url: string) => {
+    startedUrl = url;
+    player.ffmpeg = {
+      stdout: {
+        pipe() {},
+      },
+      once() {},
+      stderr: new PassThrough(),
+    } as unknown as typeof player.ffmpeg;
+  };
+  player._awaitInitialPlaybackChunk = async () => {};
+  player._startYouTubePipeline = async () => {
+    youtubePipelineStarts += 1;
+    player.ffmpeg = {
+      stdout: {
+        pipe() {},
+      },
+      once() {},
+      stderr: new PassThrough(),
+    } as unknown as typeof player.ffmpeg;
+  };
+
+  player.enqueueResolvedTracks([
+    player._buildTrack({
+      title: 'Skip Prefetched Track',
+      url: 'https://www.youtube.com/watch?v=abcdefghijk',
+      duration: '03:00',
+      source: 'youtube',
+      requestedBy: 'user-1',
+    }),
+  ]);
+
+  const queuedTrack = player.pendingTracks[0] ?? null;
+  const prefetchKey = player._getTrackPrefetchKey(queuedTrack);
+  assert.ok(prefetchKey);
+  player.nextTrackPrefetchState = {
+    key: String(prefetchKey),
+    streamUrl: 'https://stream.example.com/skip-audio',
+    createdAtMs: Date.now(),
+  };
+
+  await player.play();
+
+  assert.equal(startedUrl, 'https://stream.example.com/skip-audio');
+  assert.equal(youtubePipelineStarts, 0);
 });
 
 test('play() uses a prefetched YouTube stream URL when prefetched playback is enabled', async () => {

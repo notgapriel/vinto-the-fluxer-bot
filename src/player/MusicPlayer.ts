@@ -90,11 +90,20 @@ function parseEnabledFlag(value: unknown, fallback = false): boolean {
   return fallback;
 }
 
+function getStartupRetryAttempt(track: Track | null | undefined): number {
+  const rawValue = (track as (Track & { startupRetryCount?: unknown }) | null | undefined)?.startupRetryCount;
+  const parsed = Number.parseInt(String(rawValue ?? 0), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
 interface VoiceAdapterLike {
   sendAudio?: (stream: unknown) => Promise<unknown>;
   isStreaming?: boolean;
+  connected?: boolean;
+  channelId?: string | null;
   pauseAudio?: () => unknown;
   resumeAudio?: () => unknown;
+  getDiagnostics?: () => Promise<unknown>;
 }
 
 class PlaybackStartupAbortedError extends Error {
@@ -730,13 +739,18 @@ export class MusicPlayer extends EventEmitter {
 
       if (isYouTubeUrl(trackUrl)) {
         const seekStartSec = Math.max(0, Number.parseInt(String(track.seekStartSec ?? 0), 10) || 0);
-        const prefetchedStreamUrl = this.enableYouTubePrefetchedPlayback && seekStartSec <= 0
+        const shouldUsePrefetchedStreamUrl = seekStartSec <= 0 && (
+          this.enableYouTubePrefetchedPlayback
+          || String(startupHint ?? '').trim().toLowerCase() === 'skip'
+        );
+        const prefetchedStreamUrl = shouldUsePrefetchedStreamUrl
           ? this._consumeNextTrackPrefetch(track)
           : null;
         if (prefetchedStreamUrl) {
           this.logger?.debug?.('Using prefetched YouTube stream URL for playback startup', {
             title: track.title,
             url: trackUrl,
+            startupHint: startupHint ?? null,
           });
           await this._startHttpUrlPipeline(prefetchedStreamUrl, 0, { isLive: false });
         } else {
@@ -813,9 +827,20 @@ export class MusicPlayer extends EventEmitter {
     } catch (err) {
       const startupAborted = this._isPlaybackStartupAbortedError(err);
       let normalizedMessage = '';
+      let retryStartupTrack: Track | null = null;
       if (!startupAborted) {
         const normalized = this._normalizePlaybackError(this._withStartupStderr(err, ffmpegStartupStderr));
         normalizedMessage = String(normalized?.message ?? '').toLowerCase();
+        const startupRetryAttempt = getStartupRetryAttempt(track);
+        const shouldRetryYouTubeStartup = (
+          normalizedMessage.includes('did not produce audio output in time')
+          && String(track?.source ?? '').startsWith('youtube')
+          && startupRetryAttempt < 1
+        );
+        if (shouldRetryYouTubeStartup) {
+          retryStartupTrack = this._cloneTrack(track, { seekStartSec: track?.seekStartSec ?? 0 });
+          (retryStartupTrack as Track & { startupRetryCount?: number }).startupRetryCount = startupRetryAttempt + 1;
+        }
         this.emit('trackError', { track, error: normalized });
         this.logger?.error?.('Playback setup failed', {
           track: track.title,
@@ -832,9 +857,44 @@ export class MusicPlayer extends EventEmitter {
           normalizedMessage.includes('did not produce audio output in time')
           || normalizedMessage.includes('before audio output')
         );
-        this.consecutiveStartupFailures = isStartupFloodCandidate
+        if (isStartupFloodCandidate) {
+          const playerDiagnostics = typeof this.getDiagnostics === 'function'
+            ? this.getDiagnostics()
+            : null;
+          const voiceDiagnostics = typeof this.voice?.getDiagnostics === 'function'
+            ? await this.voice.getDiagnostics().catch(() => null)
+            : {
+                connected: Boolean(this.voice?.connected),
+                isStreaming: Boolean(this.voice?.isStreaming),
+                channelId: (this.voice as { channelId?: unknown } | null | undefined)?.channelId ?? null,
+              };
+          this.logger?.warn?.('Playback startup diagnostics snapshot', {
+            track: track.title,
+            url: track?.url ?? null,
+            source: track?.source ?? null,
+            seek: track?.seekStartSec ?? 0,
+            startupHint: startupHint ?? null,
+            initialPlaybackChunkTimeoutMs,
+            player: playerDiagnostics,
+            voice: voiceDiagnostics,
+          });
+        }
+        this.consecutiveStartupFailures = retryStartupTrack
+          ? 0
+          : isStartupFloodCandidate
           ? this.consecutiveStartupFailures + 1
           : 0;
+        if (retryStartupTrack) {
+          this.logger?.warn?.('Retrying YouTube startup after initial audio timeout', {
+            title: track?.title ?? null,
+            url: track?.url ?? null,
+            source: track?.source ?? null,
+            seek: track?.seekStartSec ?? 0,
+            retryAttempt: (retryStartupTrack as Track & { startupRetryCount?: number }).startupRetryCount ?? 1,
+            previousStartupHint: startupHint ?? null,
+            previousInitialPlaybackChunkTimeoutMs: initialPlaybackChunkTimeoutMs,
+          });
+        }
       } else {
         this.logger?.debug?.('Playback startup aborted before first audio chunk', {
           title: track?.title ?? null,
@@ -853,6 +913,10 @@ export class MusicPlayer extends EventEmitter {
 
       if (startupAborted && pendingSeekTrack) {
         this.queue.addFront(pendingSeekTrack);
+      }
+
+      if (retryStartupTrack) {
+        this.queue.addFront(retryStartupTrack);
       }
 
       if (
@@ -999,11 +1063,6 @@ export class MusicPlayer extends EventEmitter {
   }
 
   _scheduleNextTrackPrefetch(): void {
-    if (!this.enableYouTubePrefetchedPlayback) {
-      this._clearNextTrackPrefetch();
-      return;
-    }
-
     const nextTrack = this.pendingTracks[0] ?? null;
     if (!this._canPrefetchTrack(nextTrack)) {
       this._clearNextTrackPrefetch();
