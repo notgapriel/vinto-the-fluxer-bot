@@ -165,6 +165,53 @@ test('_handleTrackClose warns when yt-dlp source process ended long before expec
   )));
 });
 
+test('_handleTrackClose auto-recovers an early-ended YouTube track without source close metadata', async () => {
+  const warnings: Array<{ message: string; meta: Record<string, unknown> | undefined }> = [];
+  const player = new MusicPlayer(createVoice(), {
+    logger: {
+      warn(message: string, meta?: Record<string, unknown>) {
+        warnings.push({ message, meta });
+      },
+    },
+  });
+
+  const track = player._buildTrack({
+    title: 'Prefetched Track',
+    url: 'https://www.youtube.com/watch?v=abcdefghijk',
+    duration: '02:56',
+    source: 'youtube',
+    requestedBy: 'user-1',
+  });
+
+  let playCalls = 0;
+  player.play = async () => {
+    playCalls += 1;
+  };
+  player.getProgressSeconds = () => 108;
+  player.queue.current = track;
+  player.playing = true;
+
+  await player._handleTrackClose(track, 0, null);
+
+  const resumedTrack = player.pendingTracks[0] as ({ recoveryAttemptCount?: number } & Record<string, unknown>) | undefined;
+
+  assert.equal(playCalls, 1);
+  assert.equal(resumedTrack?.title, track.title);
+  assert.equal(resumedTrack?.seekStartSec, 106);
+  assert.equal(resumedTrack?.recoveryAttemptCount, 1);
+  assert.ok(warnings.some(({ message, meta }) => (
+    message === 'Track pipeline closed earlier than expected'
+    && meta?.autoRecoveryScheduled === true
+    && meta?.recoverySeekSec === 106
+    && meta?.sourceCode === null
+  )));
+  assert.ok(warnings.some(({ message, meta }) => (
+    message === 'Scheduling automatic YouTube playback recovery after early track close'
+    && meta?.recoveryTrigger === 'pipeline_close'
+    && meta?.recoverySeekSec === 106
+  )));
+});
+
 
 
 

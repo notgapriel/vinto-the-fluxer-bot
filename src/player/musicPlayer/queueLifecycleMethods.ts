@@ -271,6 +271,7 @@ export const queueLifecycleMethods: QueueLifecycleMethods & ThisType<QueueLifecy
       : null;
     const expectedDurationSeconds = this._parseDurationSeconds(track?.duration);
     const sourceCloseInfo = this.activeSourceProcessCloseInfo;
+    const isYouTubeTrack = String(track?.source ?? '').startsWith('youtube');
     const endedEarly = (
       !wasSkip
       && !pendingSeekTrack
@@ -284,7 +285,7 @@ export const queueLifecycleMethods: QueueLifecycleMethods & ThisType<QueueLifecy
       !wasSkip
       && !pendingSeekTrack
       && sourceCloseInfo
-      && String(track?.source ?? '').startsWith('youtube')
+      && isYouTubeTrack
       && expectedDurationSeconds != null
       && elapsedSeconds != null
       && elapsedSeconds >= 5
@@ -296,8 +297,7 @@ export const queueLifecycleMethods: QueueLifecycleMethods & ThisType<QueueLifecy
     if (
       !continuationTrack
       && endedEarly
-      && sourceCloseInfo
-      && String(track?.source ?? '').startsWith('youtube')
+      && isYouTubeTrack
       && elapsedSeconds != null
       && recoveryAttempt < 1
     ) {
@@ -355,13 +355,14 @@ export const queueLifecycleMethods: QueueLifecycleMethods & ThisType<QueueLifecy
     }
 
     if (autoRecoveryScheduled) {
-      this.logger?.warn?.('Scheduling automatic YouTube playback recovery after early source close', {
+      this.logger?.warn?.('Scheduling automatic YouTube playback recovery after early track close', {
         title: track?.title ?? null,
         url: track?.url ?? null,
         elapsedSeconds,
         expectedDurationSeconds,
         recoveryAttempt: recoveryAttempt + 1,
         recoverySeekSec,
+        recoveryTrigger: sourceCloseInfo ? 'source_close' : 'pipeline_close',
         sourceCode: sourceCloseInfo?.code ?? null,
         sourceSignal: sourceCloseInfo?.signal ?? null,
         sourceStderrTail: sourceCloseInfo?.stderrTail ?? null,
