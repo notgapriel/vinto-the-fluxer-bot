@@ -291,7 +291,7 @@ test('skip() advances to the next queued track immediately after cleanup', async
   assert.equal(player.currentTrack?.title, 'Next Track');
 });
 
-test('play() uses shorter startup timeout for the next track after a skip transition', async () => {
+test('play() uses a more tolerant YouTube startup timeout for the next track after a skip transition', async () => {
   const voice = createVoice();
   const player = new MusicPlayer(voice, {});
   let startupTimeoutMs: number | null = null;
@@ -322,7 +322,7 @@ test('play() uses shorter startup timeout for the next track after a skip transi
 
   await player.play();
 
-  assert.equal(startupTimeoutMs, 4_000);
+  assert.equal(startupTimeoutMs, 10_000);
 });
 
 test('play() ignores a prefetched YouTube stream URL by default and uses yt-dlp startup instead', async () => {

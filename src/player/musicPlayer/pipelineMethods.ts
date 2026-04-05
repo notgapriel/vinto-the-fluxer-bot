@@ -884,14 +884,18 @@ export const pipelineMethods: LooseMethodMap = {
   },
 
   _getInitialPlaybackChunkTimeoutMs(
-    track: { seekStartSec?: unknown } | null | undefined,
+    track: { seekStartSec?: unknown; source?: unknown; url?: unknown } | null | undefined,
     options: { hint?: string | null } = { hint: null }
   ) {
     const seekSec = Math.max(0, Number.parseInt(String(track?.seekStartSec ?? 0), 10) || 0);
+    const normalizedHint = String(options?.hint ?? '').trim().toLowerCase();
+    const isYouTubeTrack = String(track?.source ?? '').startsWith('youtube')
+      || /(?:youtube\.com|youtu\.be)/i.test(String(track?.url ?? ''));
     if (seekSec <= 0) {
-      return String(options?.hint ?? '').trim().toLowerCase() === 'skip'
-        ? 4_000
-        : 8_000;
+      if (normalizedHint === 'skip') {
+        return isYouTubeTrack ? 10_000 : 6_000;
+      }
+      return isYouTubeTrack ? 12_000 : 8_000;
     }
 
     return Math.min(60_000, 8_000 + (seekSec * 10));

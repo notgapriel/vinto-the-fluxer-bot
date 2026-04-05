@@ -718,6 +718,7 @@ export class MusicPlayer extends EventEmitter {
     let ffmpegStartupStderr = '';
     let onFfmpegStartupStderr = null;
     let ffmpegProc = null;
+    let initialPlaybackChunkTimeoutMs: number | null = null;
     this.activeSourceProcessCloseInfo = null;
 
     try {
@@ -787,10 +788,11 @@ export class MusicPlayer extends EventEmitter {
 
       await this.voice.sendAudio?.(playbackOutput);
       this._ensurePlaybackStartupActive(startupToken);
+      initialPlaybackChunkTimeoutMs = this._getInitialPlaybackChunkTimeoutMs(track, { hint: startupHint });
       await this._awaitInitialPlaybackChunk(
         playbackOutput,
         ffmpegProc,
-        this._getInitialPlaybackChunkTimeoutMs(track, { hint: startupHint })
+        initialPlaybackChunkTimeoutMs
       );
       this._ensurePlaybackStartupActive(startupToken);
       playbackStarted = true;
@@ -815,7 +817,17 @@ export class MusicPlayer extends EventEmitter {
         const normalized = this._normalizePlaybackError(this._withStartupStderr(err, ffmpegStartupStderr));
         normalizedMessage = String(normalized?.message ?? '').toLowerCase();
         this.emit('trackError', { track, error: normalized });
-        this.logger?.error?.('Playback setup failed', { track: track.title, error: normalized.message });
+        this.logger?.error?.('Playback setup failed', {
+          track: track.title,
+          url: track?.url ?? null,
+          source: track?.source ?? null,
+          seek: track?.seekStartSec ?? 0,
+          startupHint: startupHint ?? null,
+          initialPlaybackChunkTimeoutMs: typeof initialPlaybackChunkTimeoutMs === 'number'
+            ? initialPlaybackChunkTimeoutMs
+            : null,
+          error: normalized.message,
+        });
         const isStartupFloodCandidate = (
           normalizedMessage.includes('did not produce audio output in time')
           || normalizedMessage.includes('before audio output')
