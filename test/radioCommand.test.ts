@@ -738,3 +738,196 @@ test('radio command does not queue the same station twice when it is already pen
   assert.ok(!playerCalls.includes('skip'));
   assert.ok(replyCalls.some((value) => value.includes('already queued next')));
 });
+
+test('station save requires manage server when no DJ roles are configured', async () => {
+  const registry = buildRegistry();
+  const station = registry.resolve('station');
+  const execute = station?.execute as Execute | undefined;
+  assert.ok(execute);
+
+  let saved = false;
+
+  await assert.rejects(
+    () => Promise.resolve(execute({
+      guildId: '1474874137937518680',
+      channelId: 'text-1',
+      authorId: 'user-1',
+      args: ['save', 'Night', 'Shift', 'https://example.com/live.mp3'],
+      prefix: '!',
+      config: {
+        prefix: '!',
+        enableEmbeds: true,
+      },
+      message: {
+        id: 'message-1',
+        guild_id: '1474874137937518680',
+        author: { id: 'user-1' },
+        member: {
+          permissions: '0',
+          roles: [],
+        },
+      },
+      guildConfig: {
+        guildId: '1474874137937518680',
+        prefix: '!',
+        settings: {
+          dedupeEnabled: false,
+          stayInVoiceEnabled: false,
+          volumePercent: 100,
+          voteSkipRatio: 0.5,
+          voteSkipMinVotes: 1,
+          djRoleIds: [],
+          musicLogChannelId: null,
+        },
+      },
+      guildConfigs: {
+        async get() {
+          return {
+            guildId: '1474874137937518680',
+            prefix: '!',
+            settings: {
+              dedupeEnabled: false,
+              stayInVoiceEnabled: false,
+              volumePercent: 100,
+              voteSkipRatio: 0.5,
+              voteSkipMinVotes: 1,
+              djRoleIds: [],
+              musicLogChannelId: null,
+            },
+          };
+        },
+      },
+      library: {
+        async setGuildStation() {
+          saved = true;
+          return { name: 'Night Shift', url: 'https://example.com/live.mp3' };
+        },
+      },
+      sessions: {
+        async ensure() {
+          return {
+            player: {
+              async previewTracks() {
+                return [{
+                  title: 'Night Shift',
+                  duration: 'Live',
+                  url: 'https://example.com/live.mp3',
+                  source: 'radio-stream',
+                  isLive: true,
+                }];
+              },
+            },
+          };
+        },
+        bindTextChannel() {},
+      },
+      reply: {
+        async info() {},
+        async success() {},
+        async warning() {},
+        async error() {},
+      },
+      async safeTyping() {},
+    } as never)),
+    (error: unknown) => error instanceof Error && /Manage Server/i.test(error.message)
+  );
+
+  assert.equal(saved, false);
+});
+
+test('station save still allows manage server without configured DJ roles', async () => {
+  const registry = buildRegistry();
+  const station = registry.resolve('station');
+  const execute = station?.execute as Execute | undefined;
+  assert.ok(execute);
+
+  let savedName: string | null = null;
+  const replies: string[] = [];
+
+  await execute({
+    guildId: '1474874137937518680',
+    channelId: 'text-1',
+    authorId: 'user-1',
+    args: ['save', 'Night', 'Shift', 'https://example.com/live.mp3'],
+    prefix: '!',
+    config: {
+      prefix: '!',
+      enableEmbeds: true,
+    },
+    message: {
+      id: 'message-1',
+      guild_id: '1474874137937518680',
+      author: { id: 'user-1' },
+      member: {
+        permissions: ['MANAGE_GUILD'],
+        roles: [],
+      },
+    },
+    guildConfig: {
+      guildId: '1474874137937518680',
+      prefix: '!',
+      settings: {
+        dedupeEnabled: false,
+        stayInVoiceEnabled: false,
+        volumePercent: 100,
+        voteSkipRatio: 0.5,
+        voteSkipMinVotes: 1,
+        djRoleIds: [],
+        musicLogChannelId: null,
+      },
+    },
+    guildConfigs: {
+      async get() {
+        return {
+          guildId: '1474874137937518680',
+          prefix: '!',
+          settings: {
+            dedupeEnabled: false,
+            stayInVoiceEnabled: false,
+            volumePercent: 100,
+            voteSkipRatio: 0.5,
+            voteSkipMinVotes: 1,
+            djRoleIds: [],
+            musicLogChannelId: null,
+          },
+        };
+      },
+    },
+    library: {
+      async setGuildStation(_guildId: string, name: string) {
+        savedName = name;
+        return { name, url: 'https://example.com/live.mp3' };
+      },
+    },
+    sessions: {
+      async ensure() {
+        return {
+          player: {
+            async previewTracks() {
+              return [{
+                title: 'Night Shift',
+                duration: 'Live',
+                url: 'https://example.com/live.mp3',
+                source: 'radio-stream',
+                isLive: true,
+              }];
+            },
+          },
+        };
+      },
+      bindTextChannel() {},
+    },
+    reply: {
+      async info() {},
+      async success(text: string) {
+        replies.push(text);
+      },
+      async warning() {},
+      async error() {},
+    },
+    async safeTyping() {},
+  } as never);
+
+  assert.equal(savedName, 'Night Shift');
+  assert.ok(replies.some((entry) => entry.includes('Saved radio preset')));
+});

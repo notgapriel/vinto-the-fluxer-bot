@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.5] - 2026-04-06
+
+- Access control:
+  - restricted guild radio preset writes so `station save` and `station delete` now require a DJ role or `Manage Server`
+  - stopped treating empty DJ-role configuration as implicit write access for guild radio presets
+- Tests:
+  - added regression coverage for denied preset writes without elevated access
+  - added coverage for `Manage Server` fallback when no DJ roles are configured
+
 ## [0.5.4] - 2026-04-06
 
 - Security and resolver hardening:

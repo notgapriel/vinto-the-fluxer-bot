@@ -70,6 +70,8 @@ type LibraryHelperBundle = {
   requireLibrary: (ctx: CommandContextLike) => LibraryLike;
   getGuildConfigOrThrow: (ctx: CommandContextLike) => Promise<GuildConfigLike>;
   ensureDjAccessByConfig: (ctx: CommandContextLike, guildConfig: GuildConfigLike, actionLabel: string) => void;
+  userHasDjAccessByConfig: (ctx: CommandContextLike, guildConfig: GuildConfigLike) => boolean;
+  ensureManageGuildAccess: (ctx: CommandContextLike, actionLabel: string) => Promise<void>;
   parseRequiredInteger: (value: unknown, label: string) => number;
   normalizeIndex: (value: unknown, label: string) => number;
   trackLabel: (track: TrackLike) => string;
@@ -170,6 +172,8 @@ export function registerLibraryCommands(registry: CommandRegistry, h: LibraryHel
     requireLibrary,
     getGuildConfigOrThrow,
     ensureDjAccessByConfig,
+    userHasDjAccessByConfig,
+    ensureManageGuildAccess,
     parseRequiredInteger,
     normalizeIndex,
     trackLabel,
@@ -476,7 +480,12 @@ export function registerLibraryCommands(registry: CommandRegistry, h: LibraryHel
       const library = requireLibrary(ctx) as PlaylistLibrary;
       const action = String(ctx.args[0] ?? 'list').trim().toLowerCase();
       const guildConfig = await getGuildConfigOrThrow(ctx);
-      const enforceWriteAccess = () => ensureDjAccessByConfig(ctx, guildConfig, 'manage radio presets');
+      const enforceWriteAccess = async () => {
+        const configuredDjRoles = guildConfig?.settings?.djRoleIds;
+        const hasConfiguredDjRoles = Array.isArray(configuredDjRoles) && configuredDjRoles.length > 0;
+        if (hasConfiguredDjRoles && userHasDjAccessByConfig(ctx, guildConfig)) return;
+        await ensureManageGuildAccess(ctx, 'manage radio presets');
+      };
 
       if (action === 'list') {
         const pageProvided = Boolean(ctx.args[1]);
@@ -559,7 +568,7 @@ export function registerLibraryCommands(registry: CommandRegistry, h: LibraryHel
       }
 
       if (action === 'save') {
-        enforceWriteAccess();
+        await enforceWriteAccess();
         const url = String(ctx.args[ctx.args.length - 1] ?? '').trim();
         const name = ctx.args.slice(1, -1).join(' ').trim();
         if (!name || !isHttpUrl(url)) {
@@ -584,7 +593,7 @@ export function registerLibraryCommands(registry: CommandRegistry, h: LibraryHel
       }
 
       if (action === 'delete') {
-        enforceWriteAccess();
+        await enforceWriteAccess();
         const name = ctx.args.slice(1).join(' ').trim();
         if (!name) {
           throw new ValidationError(`Usage: ${ctx.prefix}station delete <name>`);
