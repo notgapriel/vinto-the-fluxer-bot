@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.6] - 2026-04-07
+
+- Fixes:
+  - paced live HTTP radio streams in realtime so FFmpeg no longer bursts the first seconds of PCM output before settling
+  - sent the ICY metadata request header with the trailing CRLF FFmpeg expects during live radio startup
+- Tests:
+  - added regression coverage for live radio FFmpeg args
+
 ## [0.5.5] - 2026-04-06
 
 - Access control:

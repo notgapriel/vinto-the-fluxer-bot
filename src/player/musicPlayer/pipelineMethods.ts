@@ -73,12 +73,13 @@ export const pipelineMethods: LooseMethodMap = {
     const seek = Math.max(0, Number.parseInt(String(seekSec), 10) || 0);
     const isLive = options?.isLive === true;
     const args = [
+      ...(isLive ? ['-re'] : []),
       '-nostdin',
       '-user_agent', 'Mozilla/5.0 (compatible; FluxerBot/1.0)',
     ];
 
     if (isLive) {
-      args.push('-headers', 'Icy-MetaData:1');
+      args.push('-headers', 'Icy-MetaData:1\r\n');
     }
 
     if (seek > 0) {

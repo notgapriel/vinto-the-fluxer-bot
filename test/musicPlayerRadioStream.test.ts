@@ -270,6 +270,27 @@ test('play() uses direct HTTP pipeline for live radio tracks', async () => {
   assert.equal(player.canSeekCurrentTrack(), false);
 });
 
+test('live HTTP pipeline args pace radio streams in realtime and request icy metadata cleanly', () => {
+  const player = createPlayer();
+  const ffmpegHttpArgs = player._ffmpegHttpArgs as (
+    inputUrl: string,
+    seekSec?: number,
+    options?: { isLive?: boolean }
+  ) => string[];
+
+  const args = ffmpegHttpArgs.call(player, 'https://radio.example.com/live.mp3', 0, { isLive: true });
+
+  assert.deepEqual(args.slice(0, 5), [
+    '-re',
+    '-nostdin',
+    '-user_agent',
+    'Mozilla/5.0 (compatible; FluxerBot/1.0)',
+    '-headers',
+  ]);
+  assert.equal(args[5], 'Icy-MetaData:1\r\n');
+  assert.equal(args.includes('-i'), true);
+});
+
 test('play() uses direct HTTP pipeline for non-live http audio tracks and allows seek', async () => {
   const player = createPlayer();
   let httpPipelineCalled = false;
