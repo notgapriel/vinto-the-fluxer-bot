@@ -47,6 +47,7 @@ test('help command sends paginated embed payload', async () => {
     async registerHelpPagination(channelId: string, messageId: string, pages: HelpPayload[]) {
       registeredPagination = { channelId, messageId, pages };
     },
+    args: [],
   });
 
   assert.equal(sentChannelId, 'channel-1');
