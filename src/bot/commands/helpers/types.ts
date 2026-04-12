@@ -68,6 +68,7 @@ export type SessionLike = {
     connect: (voiceChannelId: string) => Promise<unknown>;
     hasUsablePlayer: () => boolean;
     getDiagnostics: () => Record<string, unknown>;
+    loadAudioTrack: () => Promise<void>;
     [key: string]: unknown;
   };
   player: {

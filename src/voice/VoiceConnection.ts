@@ -16,7 +16,7 @@ const SAMPLES_PER_FRAME = SAMPLES_PER_CHANNEL * CHANNELS;
 const BYTES_PER_SAMPLE = 2;
 const BYTES_PER_FRAME = SAMPLES_PER_FRAME * BYTES_PER_SAMPLE;
 const STATS_TIMEOUT_MS = 750;
-const TARGET_QUEUE_MS = 600;
+const TARGET_QUEUE_MS = 1200;
 const MAX_QUEUE_MS = 1200;
 const STARTUP_PREFILL_MS = 240;
 const CONCEALMENT_MAX_FRAMES = 12;
@@ -114,7 +114,7 @@ export class VoiceConnection {
     this.logger = options.logger;
     this.connectTimeoutMs = options.connectTimeoutMs ?? 15_000;
     this.voiceMaxBitrate = Number.isFinite(options.voiceMaxBitrate)
-      ? Math.max(24_000, Math.min(320_000, Math.trunc(options.voiceMaxBitrate ?? 192_000)))
+      ? Math.max(1600, Math.min(320_000, Math.trunc(options.voiceMaxBitrate ?? 192_000)))
       : 192_000;
 
     this.room = null;
@@ -360,14 +360,12 @@ export class VoiceConnection {
     });
   }
 
-  async _ensureAudioTrack() {
-    if (this.audioSource && this.audioTrack && this.audioTrackSid) return;
-
+  async loadAudioTrack() {
     const participant = this.room?.localParticipant;
     if (!participant) {
       throw new Error('No local participant available.');
     }
-
+    
     this.audioSource = new AudioSource(SAMPLE_RATE, CHANNELS);
     this.audioTrack = LocalAudioTrack.createAudioTrack('music', this.audioSource);
 
@@ -382,6 +380,12 @@ export class VoiceConnection {
 
     const publication = await participant.publishTrack(this.audioTrack, options);
     this.audioTrackSid = String(publication?.sid ?? '') || null;
+  }
+
+  async _ensureAudioTrack() {
+    if (this.audioSource && this.audioTrack && this.audioTrackSid) return;
+
+    this.loadAudioTrack();
   }
 
   _stopAudioPump() {
