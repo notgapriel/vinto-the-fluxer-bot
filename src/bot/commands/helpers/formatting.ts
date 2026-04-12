@@ -292,6 +292,18 @@ export function createCommand<T extends CommandDefinition>(definition: T): Reado
   return Object.freeze(definition);
 }
 
+type CommandUsageContext = {
+  prefix: string;
+  command: CommandDefinition;
+};
+
+export function buildCommandUsage(ctx: CommandUsageContext) {
+  const { command: cmd, prefix } = ctx;
+
+  const aliases = cmd.aliases?.length ? ` (aliases: ${cmd.aliases.join(', ')})` : '';
+  return `\`${prefix}${cmd.usage}\` - ${cmd.description}${aliases}`;
+}
+
 type HelpPageContext = {
   prefix: string;
   registry: {
@@ -300,10 +312,7 @@ type HelpPageContext = {
 };
 
 export function buildHelpPages(ctx: HelpPageContext): MessagePayload[] {
-  const lines = ctx.registry.list().map((cmd) => {
-    const aliases = cmd.aliases?.length ? ` (aliases: ${cmd.aliases.join(', ')})` : '';
-    return `\`${ctx.prefix}${cmd.usage}\` - ${cmd.description}${aliases}`;
-  });
+  const lines = ctx.registry.list().map((cmd) => buildCommandUsage({ prefix: ctx.prefix, command: cmd }));
 
   const pageSize = 12;
   const pages: MessagePayload[] = [];
