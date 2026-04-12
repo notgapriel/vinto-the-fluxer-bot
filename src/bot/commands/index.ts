@@ -1,6 +1,7 @@
 import { registerLibraryCommands } from './libraryCommands.ts';
 import { registerConfigCommands } from './configCommands.ts';
 import { registerAdvancedCommands } from './advancedCommands.ts';
+import { registerSecretCommands } from './secretCommands.js';
 import {
   PLAYLIST_PAGE_SIZE,
   FAVORITES_PAGE_SIZE,
@@ -75,6 +76,11 @@ export function registerCommands(registry: CommandRegistry) {
     parseRequiredInteger,
     parseTextChannelId,
     requireLibrary,
+  });
+
+  registerSecretCommands(registry, {
+    createCommand,
+    ensureGuild,
   });
 }
 
