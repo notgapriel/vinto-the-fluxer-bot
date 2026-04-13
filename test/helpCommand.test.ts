@@ -85,3 +85,42 @@ test('help command sends paginated embed payload', async () => {
     .join('\n');
   assert.match(combinedDescriptions, /`!help \[command\|page_number\]`/);
 });
+
+test('help command sends single command description embed payload', async () => {
+  const { prefix, channelId, messageId, } = dummyConstants();
+  const { registry, help } = setup();
+  const execute = help?.execute as HelpExecute | undefined;
+  assert.ok(execute);
+  let sentChannelId: string | null = null;
+  let sentPayload: HelpPayload | null = null;
+  let registeredPagination: HelpPaginationRegistration | null = null;
+
+  await execute({
+    prefix,
+    registry,
+    channelId,
+    rest: {
+      async sendMessage(channelId: string, payload: HelpPayload) {
+        sentChannelId = channelId;
+        sentPayload = payload;
+        return { id: messageId };
+      },
+    },
+    async registerHelpPagination(channelId: string, messageId: string, pages: HelpPayload[], index?: number) {
+      registeredPagination = { channelId, messageId, pages, index };
+    },
+    args: ['help'],
+  });
+
+  assert.equal(sentChannelId, channelId);
+  assert.ok(sentPayload);
+  const payload: HelpPayload = sentPayload as HelpPayload;
+  assert.ok(Array.isArray(payload.embeds));
+  assert.equal(payload.embeds.length, 1);
+  assert.match(payload.embeds[0]!.title, /^Help$/);
+  assert.equal(typeof payload.embeds[0]!.description, 'string');
+  assert.match(payload.embeds[0]!.description!, /`!help \[command\|page_number\]`/);
+  assert.ok((payload.embeds[0]!.description ?? '').length > 0);
+
+  assert.ok(!registeredPagination);
+});
