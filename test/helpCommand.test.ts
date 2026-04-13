@@ -124,3 +124,55 @@ test('help command sends single command description embed payload', async () => 
 
   assert.ok(!registeredPagination);
 });
+
+test('help command sends arbitrary page for paginated embed payload', async () => {
+  const pageNum = '1';
+  const { prefix, channelId, messageId, } = dummyConstants();
+  const { registry, help } = setup();
+  const execute = help?.execute as HelpExecute | undefined;
+  assert.ok(execute);
+  let sentChannelId: string | null = null;
+  let sentPayload: HelpPayload | null = null;
+  let registeredPagination: HelpPaginationRegistration | null = null;
+
+  const pageIndex = +pageNum - 1;
+
+  await execute({
+    prefix,
+    registry,
+    channelId,
+    rest: {
+      async sendMessage(channelId: string, payload: HelpPayload) {
+        sentChannelId = channelId;
+        sentPayload = payload;
+        return { id: messageId };
+      },
+    },
+    async registerHelpPagination(channelId: string, messageId: string, pages: HelpPayload[], index?: number) {
+      registeredPagination = { channelId, messageId, pages, index };
+    },
+    args: [pageNum],
+  });
+
+  assert.equal(sentChannelId, channelId);
+  assert.ok(sentPayload);
+  const payload: HelpPayload = sentPayload as HelpPayload;
+  assert.ok(Array.isArray(payload.embeds));
+  assert.ok(payload.embeds.length > 0);
+  assert.match(payload.embeds[0]!.title, new RegExp('^Help ' + pageNum + '\\/\\d+$'));
+  assert.equal(typeof payload.embeds[0]!.description, 'string');
+  assert.ok((payload.embeds[0]!.description ?? '').length > 0);
+
+  assert.ok(registeredPagination);
+  const pagination: HelpPaginationRegistration = registeredPagination as HelpPaginationRegistration;
+  assert.equal(pagination.index, pageIndex);
+  assert.equal(pagination.channelId, channelId);
+  assert.equal(pagination.messageId, messageId);
+  assert.equal(pagination.index, pageIndex);
+  assert.ok(Array.isArray(pagination.pages));
+  assert.ok(pagination.pages.length > 0);
+  const combinedDescriptions = pagination.pages
+    .map((page: HelpPayload) => page?.embeds?.[0]?.description ?? '')
+    .join('\n');
+  assert.match(combinedDescriptions, /`!help \[command\|page_number\]`/);
+});
