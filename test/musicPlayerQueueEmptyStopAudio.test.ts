@@ -143,6 +143,55 @@ test('play() increases initial playback timeout for large seek offsets', async (
   assert.equal(startupTimeoutMs, 60_000);
 });
 
+test('play() retries a pre-audio YouTube pipeline exit with yt-dlp url fallback', async () => {
+  const voice = createVoice();
+  const player = new MusicPlayer(voice, {});
+  const startedPipelines: string[] = [];
+  let initialChunkAttempts = 0;
+
+  player._scheduleNextTrackPrefetch = () => {};
+  const installFfmpeg = () => {
+    player.ffmpeg = {
+      stdout: {
+        pipe() {},
+      },
+      once() {},
+      stderr: new PassThrough(),
+    } as unknown as typeof player.ffmpeg;
+  };
+  player._startYouTubePipeline = async () => {
+    startedPipelines.push('youtube');
+    installFfmpeg();
+  };
+  player._startYtDlpSeekPipeline = async () => {
+    startedPipelines.push('ytdlp-url');
+    installFfmpeg();
+  };
+  player._awaitInitialPlaybackChunk = async () => {
+    initialChunkAttempts += 1;
+    if (initialChunkAttempts === 1) {
+      throw new Error('Playback pipeline exited before audio output (code=1). pipe:0: Invalid data found when processing input');
+    }
+  };
+
+  player.enqueueResolvedTracks([
+    player._buildTrack({
+      title: 'Fallback Track',
+      url: 'https://www.youtube.com/watch?v=abcdefghijk',
+      duration: '03:00',
+      source: 'youtube-playlist-ytdlp',
+      requestedBy: 'user-1',
+    }),
+  ]);
+
+  await player.play();
+
+  assert.deepEqual(startedPipelines, ['youtube', 'ytdlp-url']);
+  assert.equal(initialChunkAttempts, 2);
+  assert.equal(player.currentTrack?.title, 'Fallback Track');
+  assert.equal(player.consecutiveStartupFailures, 0);
+});
+
 test('play() halts queue drain after repeated startup failures', async () => {
   const voice = createVoice();
   const player = new MusicPlayer(voice, {});

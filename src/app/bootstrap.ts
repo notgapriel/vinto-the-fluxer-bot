@@ -22,6 +22,7 @@ import { verifyApiConnectivity, resolveGatewayUrl } from './connectivity.ts';
 import { bindGatewayMetrics, bindSessionMetrics, createAppMetrics } from './metrics.ts';
 import type { SessionManagerOptions } from '../types/domain.ts';
 const PRESENCE_ROTATION_INTERVAL_MS = 10 * 60 * 1000;
+const RSS_EXIT_CONSECUTIVE_BREACHES = 3;
 const PRESENCE_SLOGANS = [
   (guildCount: number) => `${guildCount} guilds tuned in`,
   () => 'always on beat',
@@ -110,8 +111,10 @@ export async function startApp() {
   let gatewayConnected = false;
   let shuttingDown = false;
   let unhealthySince = 0;
+  let rssExitBreaches = 0;
   let unhealthyExitHandle: NodeJS.Timeout | null = null;
   let memoryTelemetryHandle: NodeJS.Timeout | null = null;
+  let rssExitHandle: NodeJS.Timeout | null = null;
 
   (dns as DnsWithDefaultOrder).setDefaultResultOrder?.(config.dnsResultOrder);
   logger.info('DNS resolution order configured', { order: config.dnsResultOrder });
@@ -293,6 +296,52 @@ export async function startApp() {
       logMemoryTelemetry('interval');
     }, config.memoryTelemetryLogIntervalMs);
     memoryTelemetryHandle.unref?.();
+  }
+  if (config.memoryRssExitMb > 0) {
+    const rssExitThresholdBytes = config.memoryRssExitMb * 1024 * 1024;
+    rssExitHandle = setInterval(() => {
+      if (shuttingDown) return;
+
+      const beforeGc = sessions.getMemoryTelemetry();
+      if (beforeGc.memory.rssBytes < rssExitThresholdBytes) {
+        rssExitBreaches = 0;
+        return;
+      }
+
+      const maybeGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+      if (typeof maybeGc === 'function') {
+        maybeGc();
+      }
+
+      const telemetry = sessions.getMemoryTelemetry();
+      if (telemetry.memory.rssBytes < rssExitThresholdBytes) {
+        rssExitBreaches = 0;
+        return;
+      }
+
+      rssExitBreaches += 1;
+      const meta = {
+        rssMb: toMegabytes(telemetry.memory.rssBytes),
+        memoryRssExitMb: config.memoryRssExitMb,
+        rssExitBreaches,
+        requiredBreaches: RSS_EXIT_CONSECUTIVE_BREACHES,
+        heapUsedMb: toMegabytes(telemetry.memory.heapUsedBytes),
+        externalMb: toMegabytes(telemetry.memory.externalBytes),
+        arrayBuffersMb: toMegabytes(telemetry.memory.arrayBuffersBytes),
+        sessionsTotal: telemetry.sessionsTotal,
+        voiceConnectionsConnected: telemetry.voiceConnectionsConnected,
+        playersPlaying: telemetry.playersPlaying,
+      };
+
+      if (rssExitBreaches < RSS_EXIT_CONSECUTIVE_BREACHES) {
+        memoryLogger.warn('Runtime RSS exceeded configured threshold', meta);
+        return;
+      }
+
+      memoryLogger.error('Runtime RSS stayed above configured threshold, exiting for supervisor restart', meta);
+      process.exit(1);
+    }, config.memoryTelemetryIntervalMs);
+    rssExitHandle.unref?.();
   }
 
   const writeHeapSnapshotOnSignal = (reason: string) => {
@@ -515,6 +564,10 @@ export async function startApp() {
     if (memoryTelemetryHandle) {
       clearInterval(memoryTelemetryHandle);
       memoryTelemetryHandle = null;
+    }
+    if (rssExitHandle) {
+      clearInterval(rssExitHandle);
+      rssExitHandle = null;
     }
     if (heapSnapshotSignalEnabled) {
       process.off('SIGUSR2', heapSnapshotSignalHandler);
