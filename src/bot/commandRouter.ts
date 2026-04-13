@@ -466,8 +466,8 @@ export class CommandRouter {
       registry: this.registry,
       startedAt: this.startedAt,
       withGuildOpLock: (key: string, fn: () => Promise<unknown>) => this._withGuildOpLock(message.guild_id ?? null, key, fn),
-      registerHelpPagination: async (channelId: string, messageId: string, pages: MessagePayload[]) => {
-        await this._registerHelpPagination(channelId, messageId, pages);
+      registerHelpPagination: async (channelId: string, messageId: string, pages: MessagePayload[], index?: number) => {
+        await this._registerHelpPagination(channelId, messageId, pages, index);
       },
       registerSearchReactionSelection: async (messageId: string, tracks: unknown[], timeoutMs: number | null = null) => {
         await this._registerSearchReactionSelection({
@@ -757,8 +757,8 @@ export class CommandRouter {
     run();
   }
 
-  async _registerHelpPagination(channelId: string, messageId: string, pages: MessagePayload[]) {
-    return registerHelpPagination(this, channelId, messageId, pages);
+  async _registerHelpPagination(channelId: string, messageId: string, pages: MessagePayload[], index?: number) {
+    return registerHelpPagination(this, channelId, messageId, pages, index);
   }
 
   async _runWeeklyRecapSweep() {
