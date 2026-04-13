@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.8] - 2026-04-13
+
+- Fixes:
+  - retried YouTube startup failures that exited before audio output through a cookie-aware yt-dlp URL fallback
+  - prevented transient yt-dlp invalid-input startup failures from rapidly draining playlist queues
+- Operations:
+  - added an optional RSS watchdog so supervisors can restart long-running processes before native memory growth gets too high
+  - capped Docker Compose app and MongoDB json-file logs to prevent unbounded disk growth
+- Tests:
+  - added regression coverage for pre-audio YouTube pipeline fallback after invalid FFmpeg input
+  - covered RSS watchdog configuration parsing
+
 ## [0.5.7] - 2026-04-07
 
 - Fixes:

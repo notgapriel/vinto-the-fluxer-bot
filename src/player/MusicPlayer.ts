@@ -96,6 +96,11 @@ function getStartupRetryAttempt(track: Track | null | undefined): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+function getStartupFallbackPipeline(track: Track | null | undefined): 'ytdlp-url' | null {
+  const fallback = (track as (Track & { startupFallbackPipeline?: unknown }) | null | undefined)?.startupFallbackPipeline;
+  return fallback === 'ytdlp-url' ? 'ytdlp-url' : null;
+}
+
 interface VoiceAdapterLike {
   sendAudio?: (stream: unknown) => Promise<unknown>;
   isStreaming?: boolean;
@@ -291,6 +296,12 @@ export class MusicPlayer extends EventEmitter {
     includeClientArg?: boolean | string | null
   ) => Promise<string | null>;
   declare _startYtDlpPipeline: (url: string, seekSec?: number) => Promise<void>;
+  declare _startYtDlpSeekPipeline: (
+    url: string,
+    seekSec?: number,
+    formatSelector?: string | null,
+    includeClientArg?: boolean | string | null
+  ) => Promise<void>;
   declare _cloneTrack: (track: Track, overrides?: Partial<Track> & { id?: string; queuedAt?: number }) => Track;
   declare _trackKey: (track: Partial<Track> | null | undefined) => string | null;
   declare _hasDuplicateTrack: (candidate: Track) => boolean;
@@ -742,22 +753,27 @@ export class MusicPlayer extends EventEmitter {
 
       if (isYouTubeUrl(trackUrl)) {
         const seekStartSec = Math.max(0, Number.parseInt(String(track.seekStartSec ?? 0), 10) || 0);
-        const shouldUsePrefetchedStreamUrl = seekStartSec <= 0 && (
-          this.enableYouTubePrefetchedPlayback
-          || String(startupHint ?? '').trim().toLowerCase() === 'skip'
-        );
-        const prefetchedStreamUrl = shouldUsePrefetchedStreamUrl
-          ? this._consumeNextTrackPrefetch(track)
-          : null;
-        if (prefetchedStreamUrl) {
-          this.logger?.debug?.('Using prefetched YouTube stream URL for playback startup', {
-            title: track.title,
-            url: trackUrl,
-            startupHint: startupHint ?? null,
-          });
-          await this._startHttpUrlPipeline(prefetchedStreamUrl, 0, { isLive: false });
+        const startupFallbackPipeline = getStartupFallbackPipeline(track);
+        if (startupFallbackPipeline === 'ytdlp-url') {
+          await this._startYtDlpSeekPipeline(trackUrl, seekStartSec);
         } else {
-          await this._startYouTubePipeline(trackUrl, seekStartSec);
+          const shouldUsePrefetchedStreamUrl = seekStartSec <= 0 && (
+            this.enableYouTubePrefetchedPlayback
+            || String(startupHint ?? '').trim().toLowerCase() === 'skip'
+          );
+          const prefetchedStreamUrl = shouldUsePrefetchedStreamUrl
+            ? this._consumeNextTrackPrefetch(track)
+            : null;
+          if (prefetchedStreamUrl) {
+            this.logger?.debug?.('Using prefetched YouTube stream URL for playback startup', {
+              title: track.title,
+              url: trackUrl,
+              startupHint: startupHint ?? null,
+            });
+            await this._startHttpUrlPipeline(prefetchedStreamUrl, 0, { isLive: false });
+          } else {
+            await this._startYouTubePipeline(trackUrl, seekStartSec);
+          }
         }
       } else if (track?.isLive || String(track.source ?? '').startsWith('radio')) {
         await this._startHttpUrlPipeline(trackUrl, 0, { isLive: true });
@@ -836,14 +852,22 @@ export class MusicPlayer extends EventEmitter {
         const normalized = this._normalizePlaybackError(this._withStartupStderr(err, ffmpegStartupStderr));
         normalizedMessage = String(normalized?.message ?? '').toLowerCase();
         const startupRetryAttempt = getStartupRetryAttempt(track);
+        const shouldFallbackToYtDlpUrl = (
+          normalizedMessage.includes('before audio output')
+          && String(track?.source ?? '').startsWith('youtube')
+          && startupRetryAttempt < 1
+        );
         const shouldRetryYouTubeStartup = (
           normalizedMessage.includes('did not produce audio output in time')
           && String(track?.source ?? '').startsWith('youtube')
           && startupRetryAttempt < 1
-        );
+        ) || shouldFallbackToYtDlpUrl;
         if (shouldRetryYouTubeStartup) {
           retryStartupTrack = this._cloneTrack(track, { seekStartSec: track?.seekStartSec ?? 0 });
           (retryStartupTrack as Track & { startupRetryCount?: number }).startupRetryCount = startupRetryAttempt + 1;
+          if (shouldFallbackToYtDlpUrl) {
+            (retryStartupTrack as Track & { startupFallbackPipeline?: 'ytdlp-url' }).startupFallbackPipeline = 'ytdlp-url';
+          }
         }
         this.emit('trackError', { track, error: normalized });
         this.logger?.error?.('Playback setup failed', {
@@ -889,12 +913,13 @@ export class MusicPlayer extends EventEmitter {
           ? this.consecutiveStartupFailures + 1
           : 0;
         if (retryStartupTrack) {
-          this.logger?.warn?.('Retrying YouTube startup after initial audio timeout', {
+          this.logger?.warn?.('Retrying YouTube startup after pre-audio pipeline failure', {
             title: track?.title ?? null,
             url: track?.url ?? null,
             source: track?.source ?? null,
             seek: track?.seekStartSec ?? 0,
             retryAttempt: (retryStartupTrack as Track & { startupRetryCount?: number }).startupRetryCount ?? 1,
+            fallbackPipeline: getStartupFallbackPipeline(retryStartupTrack),
             previousStartupHint: startupHint ?? null,
             previousInitialPlaybackChunkTimeoutMs: initialPlaybackChunkTimeoutMs,
           });
