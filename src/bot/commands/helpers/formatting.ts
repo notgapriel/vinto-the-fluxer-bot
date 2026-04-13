@@ -292,6 +292,41 @@ export function createCommand<T extends CommandDefinition>(definition: T): Reado
   return Object.freeze(definition);
 }
 
+type CommandUsageContext = {
+  prefix: string;
+  command: CommandDefinition;
+};
+
+export function buildCommandUsage(ctx: CommandUsageContext) {
+  const { command: cmd, prefix } = ctx;
+
+  const aliases = cmd.aliases?.length ? ` (aliases: \`${cmd.aliases.join('`, `')}\`)` : '';
+  return `\`${prefix}${cmd.usage}\` - ${cmd.description}${aliases}`;
+}
+
+type HelpPayloadContext = {
+  title: string;
+  description: string;
+};
+
+export function buildHelpPayload(ctx: HelpPayloadContext): MessagePayload {
+  return {
+    embeds: [
+      buildEmbed({
+        title: ctx.title,
+        description: ctx.description,
+        footer: `Support: ${SUPPORT_SERVER_URL}`,
+      }),
+    ],
+    allowed_mentions: {
+      parse: [],
+      users: [],
+      roles: [],
+      replied_user: false,
+    },
+  };
+}
+
 type HelpPageContext = {
   prefix: string;
   registry: {
@@ -300,10 +335,7 @@ type HelpPageContext = {
 };
 
 export function buildHelpPages(ctx: HelpPageContext): MessagePayload[] {
-  const lines = ctx.registry.list().map((cmd) => {
-    const aliases = cmd.aliases?.length ? ` (aliases: ${cmd.aliases.join(', ')})` : '';
-    return `\`${ctx.prefix}${cmd.usage}\` - ${cmd.description}${aliases}`;
-  });
+  const lines = ctx.registry.list().map((cmd) => buildCommandUsage({ prefix: ctx.prefix, command: cmd }));
 
   const pageSize = 12;
   const pages: MessagePayload[] = [];
@@ -311,21 +343,12 @@ export function buildHelpPages(ctx: HelpPageContext): MessagePayload[] {
 
   for (let i = 0; i < totalPages; i += 1) {
     const slice = lines.slice(i * pageSize, (i + 1) * pageSize);
-    pages.push({
-      embeds: [
-        buildEmbed({
-          title: `Help ${i + 1}/${totalPages}`,
-          description: slice.join('\n').slice(0, 3900),
-          footer: `Support: ${SUPPORT_SERVER_URL}`,
-        }),
-      ],
-      allowed_mentions: {
-        parse: [],
-        users: [],
-        roles: [],
-        replied_user: false,
-      },
-    });
+    pages.push(
+      buildHelpPayload({
+        title: `Help ${i + 1}/${totalPages}`,
+        description: slice.join('\n').slice(0, 3900),
+      })
+    );
   }
 
   return pages;
