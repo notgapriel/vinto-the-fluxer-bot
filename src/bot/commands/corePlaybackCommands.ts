@@ -73,7 +73,7 @@ type PlaybackCommandContext = CommandContextLike & {
   };
   withGuildOpLock: (label: string, task: () => Promise<void>) => Promise<void>;
   safeTyping: () => Promise<unknown>;
-  registerHelpPagination?: (channelId: string, messageId: string, pages: MessagePayload[]) => Promise<unknown>;
+  registerHelpPagination?: (channelId: string, messageId: string, pages: MessagePayload[], index?: number) => Promise<unknown>;
   registerSearchReactionSelection?: (messageId: string, results: TrackDataLike[], ttlMs: number) => Promise<unknown>;
   sessions: CommandContextLike['sessions'] & {
     markSnapshotDirty?: (session: unknown, flushSoon?: boolean) => void;

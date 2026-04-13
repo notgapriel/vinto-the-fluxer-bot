@@ -84,13 +84,13 @@ type RouterLike = {
   _withGuildOpLock: (guildId: string, key: string, fn: () => Promise<unknown>) => Promise<unknown>;
 };
 
-export async function registerHelpPagination(router: RouterLike, channelId: string, messageId: string, pages: MessagePayload[]) {
+export async function registerHelpPagination(router: RouterLike, channelId: string, messageId: string, pages: MessagePayload[], index: number = 0) {
   if (!channelId || !messageId || !Array.isArray(pages) || pages.length <= 1) return;
   router.helpPaginations.set(String(messageId), {
     channelId: String(channelId),
     messageId: String(messageId),
     pages,
-    index: 0,
+    index,
     updatedAt: Date.now(),
   });
 

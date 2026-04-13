@@ -17,6 +17,7 @@ type HelpPaginationRegistration = {
   channelId: string;
   messageId: string;
   pages: HelpPayload[];
+  index: number | undefined;
 };
 
 function dummyConstants() {
@@ -57,8 +58,8 @@ test('help command sends paginated embed payload', async () => {
         return { id: messageId };
       },
     },
-    async registerHelpPagination(channelId: string, messageId: string, pages: HelpPayload[]) {
-      registeredPagination = { channelId, messageId, pages };
+    async registerHelpPagination(channelId: string, messageId: string, pages: HelpPayload[], index?: number) {
+      registeredPagination = { channelId, messageId, pages, index };
     },
     args: [],
   });
