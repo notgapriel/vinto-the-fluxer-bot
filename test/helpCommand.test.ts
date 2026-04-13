@@ -77,10 +77,11 @@ test('help command sends paginated embed payload', async () => {
   const pagination: HelpPaginationRegistration = registeredPagination as HelpPaginationRegistration;
   assert.equal(pagination.channelId, channelId);
   assert.equal(pagination.messageId, messageId);
+  assert.equal(pagination.index, undefined);
   assert.ok(Array.isArray(pagination.pages));
   assert.ok(pagination.pages.length > 0);
   const combinedDescriptions = pagination.pages
     .map((page: HelpPayload) => page?.embeds?.[0]?.description ?? '')
     .join('\n');
-  assert.match(combinedDescriptions, /`!help \[command\]`/);
+  assert.match(combinedDescriptions, /`!help \[command\|page_number\]`/);
 });

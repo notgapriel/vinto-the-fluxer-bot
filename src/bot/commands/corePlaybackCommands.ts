@@ -478,7 +478,7 @@ export function registerCorePlaybackCommands(registry: CommandRegistry) {
     name: 'help',
     aliases: ['h'],
     description: 'Show usage for a command or for all available commands.',
-    usage: 'help [command]',
+    usage: 'help [command|page_number]',
     async execute(ctx: PlaybackCommandContext) {
       if (!ctx.rest?.sendMessage) {
         throw new ValidationError('REST adapter is not available.');
@@ -498,6 +498,27 @@ export function registerCorePlaybackCommands(registry: CommandRegistry) {
 
       // if argument is specified, print single entry
       const arg = args[0]!.toLowerCase();
+
+      if (/^\d+$/.test(arg)) {
+        const pages = buildHelpPages({ prefix: ctx.prefix, registry });
+
+        // `- 1` as help pages are one-indexed
+        const pageIndex = parseInt(arg) - 1;
+        if (!isNaN(pageIndex)) {
+          if (pageIndex in pages) {
+            const sentMessage = await ctx.rest.sendMessage(ctx.channelId, withCommandReplyReference(ctx, pages[pageIndex]!)) as SentMessageLike | null;
+            const messageId = sentMessage?.id ?? sentMessage?.message?.id ?? null;
+            if (messageId && ctx.registerHelpPagination) {
+              await ctx.registerHelpPagination(ctx.channelId, messageId, pages, pageIndex);
+            }
+
+            return;
+          }
+        }
+
+        await ctx.reply.error(`Unknown page number \`${arg}\`. Please specify a number between \`1\` and \`${pages.length}\`.`);
+        return;
+      }
 
       // will only acknowledge the first argument
       const command = registry.list().find(cmd => [cmd.name, ...(cmd.aliases ?? Array<string>())].includes(arg));
