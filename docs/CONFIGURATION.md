@@ -97,6 +97,7 @@ Most runtime environment variables are parsed in `src/config.ts`. `.env.example`
 | `VOICE_MAX_BITRATE` | `192000` | Max outbound voice track bitrate in bps. Lower this on multi-stream hosts to cut CPU and network pressure. |
 | `MEMORY_TELEMETRY_INTERVAL_MS` | `15000` | Sampling interval for runtime memory telemetry collection. |
 | `MEMORY_TELEMETRY_LOG_INTERVAL_MS` | `300000` | Log interval for aggregated runtime memory telemetry. Set `0` to disable periodic memory log emission. |
+| `MEMORY_RSS_EXIT_MB` | `0` | Optional RSS watchdog threshold in MB. When greater than `0`, the process exits with code `1` after repeated over-threshold samples so a supervisor can restart it. |
 | `HEAP_SNAPSHOT_SIGNAL_ENABLED` | `1` | Allow runtime heap snapshot signal handling. |
 | `HEAP_SNAPSHOT_DIR` | `.heap-snapshots` | Directory used for heap snapshot output. |
 
@@ -181,6 +182,10 @@ Notes:
 | `MONITORING_ENABLED` | `1` | Start monitoring HTTP server. |
 | `MONITORING_HOST` | `0.0.0.0` | Monitoring bind host. Restrict this in untrusted environments. |
 | `MONITORING_PORT` | `9091` | Monitoring bind port. |
+| `APP_LOG_MAX_SIZE` | `50m` | Docker Compose json-file log rotation size for the app container. Used by `docker-compose.yml`, not parsed by `loadConfig()`. |
+| `APP_LOG_MAX_FILE` | `5` | Docker Compose retained app log files. Used by `docker-compose.yml`, not parsed by `loadConfig()`. |
+| `MONGO_LOG_MAX_SIZE` | `25m` | Docker Compose json-file log rotation size for the bundled MongoDB container. |
+| `MONGO_LOG_MAX_FILE` | `3` | Docker Compose retained MongoDB log files. |
 | `UNHEALTHY_EXIT_ENABLED` | `1` | Exit the process when runtime readiness stays unhealthy long enough, so Docker restart policies can recover it. |
 | `UNHEALTHY_EXIT_AFTER_MS` | `180000` | How long `/readyz` may stay unhealthy before the process exits with code `1`. |
 | `UNHEALTHY_CHECK_INTERVAL_MS` | `5000` | How often the runtime checks whether unhealthy state should trigger a forced exit. |

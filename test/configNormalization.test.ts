@@ -70,8 +70,17 @@ test('loadConfig enables memory telemetry defaults and heap snapshot signal', ()
 
   assert.equal(config.memoryTelemetryIntervalMs, 15000);
   assert.equal(config.memoryTelemetryLogIntervalMs, 300000);
+  assert.equal(config.memoryRssExitMb, 0);
   assert.equal(config.heapSnapshotSignalEnabled, true);
   assert.equal(config.heapSnapshotDir, '.heap-snapshots');
+});
+
+test('loadConfig accepts optional RSS exit threshold', () => {
+  const config = loadConfig(buildEnv({
+    MEMORY_RSS_EXIT_MB: '1536',
+  }));
+
+  assert.equal(config.memoryRssExitMb, 1536);
 });
 
 
