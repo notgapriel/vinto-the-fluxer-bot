@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.0] - 2026-04-14
+
+- Features:
+  - added targeted `help <command>` output for command usage details
+  - added `help <page_number>` support for opening a specific help page
+- Docs:
+  - updated the README command list with the new help usage
+- Tests:
+  - added coverage for targeted command help and direct help page selection
+
 ## [0.5.7] - 2026-04-07
 
 - Fixes:
