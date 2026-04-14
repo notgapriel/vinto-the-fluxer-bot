@@ -10,11 +10,11 @@ import type {
 } from '../types/core.ts';
 
 const COLORS = {
-  brand: 0xff2d78,
-  info: 0xff2d78,
-  success: 0xff2d78,
-  warning: 0xff2d78,
-  error: 0xff2d78,
+  brand: 0x307efa,
+  info: 0x307efa,
+  success: 0x307efa,
+  warning: 0x307efa,
+  error: 0x307efa,
 };
 const BOT_BRAND = String(process.env.BOT_BRAND ?? '').trim() || 'Vinto';
 
