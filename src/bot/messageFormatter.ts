@@ -16,7 +16,7 @@ const COLORS = {
   warning: 0xff2d78,
   error: 0xff2d78,
 };
-const BOT_BRAND = 'Vinto';
+const BOT_BRAND = String(process.env.BOT_BRAND ?? '').trim() || 'Vinto';
 
 interface BuildEmbedOptions {
   title?: string | null;
