@@ -96,9 +96,10 @@ function getStartupRetryAttempt(track: Track | null | undefined): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-function getStartupFallbackPipeline(track: Track | null | undefined): 'ytdlp-url' | null {
+function getStartupFallbackPipeline(track: Track | null | undefined): 'ytdlp-url' | 'ytdlp-proxy' | null {
   const fallback = (track as (Track & { startupFallbackPipeline?: unknown }) | null | undefined)?.startupFallbackPipeline;
-  return fallback === 'ytdlp-url' ? 'ytdlp-url' : null;
+  if (fallback === 'ytdlp-url' || fallback === 'ytdlp-proxy') return fallback;
+  return null;
 }
 
 interface VoiceAdapterLike {
@@ -302,7 +303,11 @@ export class MusicPlayer extends EventEmitter {
     formatSelector?: string | null,
     includeClientArg?: boolean | string | null
   ) => Promise<string | null>;
-  declare _startYtDlpPipeline: (url: string, seekSec?: number) => Promise<void>;
+  declare _startYtDlpPipeline: (
+    url: string,
+    seekSec?: number,
+    options?: { proxyOnly?: boolean }
+  ) => Promise<void>;
   declare _startYtDlpSeekPipeline: (
     url: string,
     seekSec?: number,
@@ -765,6 +770,8 @@ export class MusicPlayer extends EventEmitter {
         const startupFallbackPipeline = getStartupFallbackPipeline(track);
         if (startupFallbackPipeline === 'ytdlp-url') {
           await this._startYtDlpSeekPipeline(trackUrl, seekStartSec);
+        } else if (startupFallbackPipeline === 'ytdlp-proxy') {
+          await this._startYtDlpPipeline(trackUrl, seekStartSec, { proxyOnly: true });
         } else {
           const shouldUsePrefetchedStreamUrl = seekStartSec <= 0 && (
             this.enableYouTubePrefetchedPlayback
@@ -875,7 +882,14 @@ export class MusicPlayer extends EventEmitter {
           retryStartupTrack = this._cloneTrack(track, { seekStartSec: track?.seekStartSec ?? 0 });
           (retryStartupTrack as Track & { startupRetryCount?: number }).startupRetryCount = startupRetryAttempt + 1;
           if (shouldFallbackToYtDlpUrl) {
-            (retryStartupTrack as Track & { startupFallbackPipeline?: 'ytdlp-url' }).startupFallbackPipeline = 'ytdlp-url';
+            const currentYtDlpDiagnostics = this._lastYtDlpDiagnostics;
+            const shouldRetryWithProxyPipe = (
+              Boolean(this.ytdlpProxyUrl)
+              && !currentYtDlpDiagnostics?.proxyEnabled
+            );
+            (retryStartupTrack as Track & { startupFallbackPipeline?: 'ytdlp-url' | 'ytdlp-proxy' }).startupFallbackPipeline = shouldRetryWithProxyPipe
+              ? 'ytdlp-proxy'
+              : 'ytdlp-url';
           }
         }
         this.emit('trackError', { track, error: normalized });

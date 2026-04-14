@@ -192,6 +192,58 @@ test('play() retries a pre-audio YouTube pipeline exit with yt-dlp url fallback'
   assert.equal(player.consecutiveStartupFailures, 0);
 });
 
+test('play() retries a pre-audio YouTube pipeline exit with yt-dlp proxy pipe fallback', async () => {
+  const voice = createVoice();
+  const player = new MusicPlayer(voice, { ytdlpProxyUrl: 'http://proxy.example:8080' });
+  const startedPipelines: Array<{ name: string; proxyOnly?: boolean }> = [];
+  let initialChunkAttempts = 0;
+
+  player._scheduleNextTrackPrefetch = () => {};
+  const installFfmpeg = () => {
+    player.ffmpeg = {
+      stdout: {
+        pipe() {},
+      },
+      once() {},
+      stderr: new PassThrough(),
+    } as unknown as typeof player.ffmpeg;
+  };
+  player._startYouTubePipeline = async () => {
+    startedPipelines.push({ name: 'youtube' });
+    player._lastYtDlpDiagnostics = { proxyEnabled: false };
+    installFfmpeg();
+  };
+  player._startYtDlpPipeline = async (_url: string, _seekSec = 0, options = {}) => {
+    startedPipelines.push({ name: 'ytdlp-pipe', ...(options.proxyOnly != null ? { proxyOnly: options.proxyOnly } : {}) });
+    installFfmpeg();
+  };
+  player._awaitInitialPlaybackChunk = async () => {
+    initialChunkAttempts += 1;
+    if (initialChunkAttempts === 1) {
+      throw new Error('Playback pipeline exited before audio output (code=1). pipe:0: Invalid data found when processing input');
+    }
+  };
+
+  player.enqueueResolvedTracks([
+    player._buildTrack({
+      title: 'Proxy Fallback Track',
+      url: 'https://www.youtube.com/watch?v=abcdefghijk',
+      duration: '03:00',
+      source: 'youtube',
+      requestedBy: 'user-1',
+    }),
+  ]);
+
+  await player.play();
+
+  assert.deepEqual(startedPipelines, [
+    { name: 'youtube' },
+    { name: 'ytdlp-pipe', proxyOnly: true },
+  ]);
+  assert.equal(initialChunkAttempts, 2);
+  assert.equal(player.currentTrack?.title, 'Proxy Fallback Track');
+});
+
 test('play() halts queue drain after repeated startup failures', async () => {
   const voice = createVoice();
   const player = new MusicPlayer(voice, {});

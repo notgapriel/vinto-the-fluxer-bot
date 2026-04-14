@@ -162,7 +162,11 @@ export const pipelineMethods: LooseMethodMap = {
     await this._startPlayDlPipeline(url, seekSec);
   },
 
-  async _startYtDlpPipeline(url: string, seekSec = 0) {
+  async _startYtDlpPipeline(
+    url: string,
+    seekSec = 0,
+    options: { proxyOnly?: boolean } = {}
+  ) {
     const attempts: Array<{
       format: string | null;
       includeClientArg: boolean | string | null;
@@ -179,7 +183,9 @@ export const pipelineMethods: LooseMethodMap = {
       }
     };
 
-    appendAttempts(null);
+    if (!options.proxyOnly) {
+      appendAttempts(null);
+    }
     if (this.ytdlpProxyUrl) {
       appendAttempts(this.ytdlpProxyUrl);
     }
