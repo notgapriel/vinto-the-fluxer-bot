@@ -102,6 +102,55 @@ test('yt-dlp seek startup retries pipe-based startup strategies directly', async
   assert.deepEqual(attemptedClients, ['web', false, 'web']);
 });
 
+test('yt-dlp startup retries with configured proxy after YouTube block errors', async () => {
+  const player = new MusicPlayer({}, {
+    logger: null,
+    ytdlpYoutubeClient: 'web',
+    ytdlpProxyUrl: 'http://proxy.example:8080',
+  });
+  const attempts: Array<{ client: boolean | string | null; proxy: string | null }> = [];
+
+  player._startYtDlpPipelineWithFormat = async (
+    _url: string,
+    _seekSec: number,
+    _format: string | null,
+    includeClientArg: boolean | string | null,
+    proxyUrl?: string | null
+  ) => {
+    attempts.push({ client: includeClientArg, proxy: proxyUrl ?? null });
+    if (!proxyUrl) {
+      throw new Error("ERROR: [youtube] demo1234567: Video unavailable. This content isn't available.");
+    }
+  };
+
+  await player._startYtDlpPipeline('https://www.youtube.com/watch?v=demo1234567', 0);
+
+  assert.deepEqual(attempts.map((attempt) => Boolean(attempt.proxy)), [false, false, false, false, true]);
+  assert.equal(attempts.at(-1)?.proxy, 'http://proxy.example:8080');
+});
+
+test('yt-dlp command helper retries with proxy without changing the first attempt', async () => {
+  const player = new MusicPlayer({}, {
+    logger: null,
+    ytdlpProxyUrl: 'http://proxy.example:8080',
+  });
+  const calls: string[][] = [];
+
+  player._runYtDlpCommand = async (args: string[]) => {
+    calls.push(args);
+    if (calls.length === 1) {
+      throw new Error('ERROR: [youtube] demo1234567: HTTP Error 403: Forbidden');
+    }
+    return { stdout: 'ok', stderr: '', code: 0 };
+  };
+
+  const result = await player._runYtDlpCommandWithProxyFallback(['--dump-single-json', 'url'], 15_000);
+
+  assert.equal(result.stdout, 'ok');
+  assert.deepEqual(calls[0], ['--dump-single-json', 'url']);
+  assert.deepEqual(calls[1], ['--proxy', 'http://proxy.example:8080', '--dump-single-json', 'url']);
+});
+
 test('youtube startup falls back to play-dl when yt-dlp startup exhausts all strategies', async () => {
   const player = createPlayer();
   let playDlCalls = 0;

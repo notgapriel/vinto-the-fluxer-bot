@@ -4,7 +4,7 @@ import playdl from 'play-dl';
 import { LiveAudioProcessor, isLiveFilterPresetSupported } from '../LiveAudioProcessor.ts';
 import { ValidationError } from '../../core/errors.ts';
 import { FILTER_PRESETS } from './constants.ts';
-import { isRetryableYtDlpStartupError } from './errorUtils.ts';
+import { isRetryableYtDlpProxyError, isRetryableYtDlpStartupError } from './errorUtils.ts';
 import {
   clamp,
   isYouTubeUrl,
@@ -67,6 +67,12 @@ export const pipelineMethods: LooseMethodMap = {
       return String(this.ytdlpYoutubeClient ?? '').trim() || null;
     }
     return null;
+  },
+
+  _withYtDlpProxyArgs(args: string[], proxyUrl?: string | null) {
+    const proxy = String(proxyUrl ?? '').trim();
+    if (!proxy) return [...args];
+    return ['--proxy', proxy, ...args];
   },
 
   _ffmpegHttpArgs(inputUrl: string, seekSec = 0, options: { isLive?: boolean } = {}) {
@@ -157,31 +163,45 @@ export const pipelineMethods: LooseMethodMap = {
   },
 
   async _startYtDlpPipeline(url: string, seekSec = 0) {
-    const attempts = [];
+    const attempts: Array<{
+      format: string | null;
+      includeClientArg: boolean | string | null;
+      proxyUrl: string | null;
+    }> = [];
     const strategies = this._getYtDlpClientStrategies();
     const formats = ['bestaudio/best', null];
-    for (const format of formats) {
-      for (const includeClientArg of strategies) {
-        attempts.push({ format, includeClientArg });
+
+    const appendAttempts = (proxyUrl: string | null) => {
+      for (const format of formats) {
+        for (const includeClientArg of strategies) {
+          attempts.push({ format, includeClientArg, proxyUrl });
+        }
       }
+    };
+
+    appendAttempts(null);
+    if (this.ytdlpProxyUrl) {
+      appendAttempts(this.ytdlpProxyUrl);
     }
 
     let lastErr = null;
 
     for (const attempt of attempts) {
       try {
-        await this._startYtDlpPipelineWithFormat(url, seekSec, attempt.format, attempt.includeClientArg);
+        await this._startYtDlpPipelineWithFormat(url, seekSec, attempt.format, attempt.includeClientArg, attempt.proxyUrl);
         return;
       } catch (err: unknown) {
         this._cleanupProcesses();
         lastErr = err;
-        if (!isRetryableYtDlpStartupError(err)) {
+        const retryable = isRetryableYtDlpStartupError(err) || isRetryableYtDlpProxyError(err);
+        if (!retryable) {
           throw err;
         }
 
         this.logger?.warn?.('yt-dlp startup strategy failed, retrying with next strategy', {
           format: attempt.format ?? '(default)',
           includeClientArg: attempt.includeClientArg,
+          proxyEnabled: Boolean(attempt.proxyUrl),
           seekSec,
           error: err instanceof Error ? err.message : String(err),
         });
@@ -223,17 +243,19 @@ export const pipelineMethods: LooseMethodMap = {
     url: string,
     seekSec = 0,
     formatSelector: string | null = 'bestaudio/best',
-    includeClientArg: boolean | string | null = true
+    includeClientArg: boolean | string | null = true,
+    proxyUrl: string | null = null
   ) {
     this._lastYtDlpDiagnostics = {
       formatSelector: formatSelector ?? null,
       includeClientArg: Boolean(includeClientArg),
+      proxyEnabled: Boolean(proxyUrl),
       selectedFormats: null,
       selectedItag: null,
       updatedAt: new Date().toISOString(),
     };
 
-    this.sourceProc = await this._spawnYtDlp(url, formatSelector, includeClientArg);
+    this.sourceProc = await this._spawnYtDlp(url, formatSelector, includeClientArg, proxyUrl);
     this.sourceProc.stderr?.setEncoding?.('utf8');
 
     let stderr = '';
@@ -441,7 +463,8 @@ export const pipelineMethods: LooseMethodMap = {
   async _spawnYtDlp(
     url: string,
     formatSelector: string | null = 'bestaudio/best',
-    includeClientArg: boolean | string | null = true
+    includeClientArg: boolean | string | null = true,
+    proxyUrl: string | null = null
   ) {
     const ytdlpVerboseEnabled = this._isYtDlpVerboseEnabled();
     const commonArgs = [
@@ -476,19 +499,20 @@ export const pipelineMethods: LooseMethodMap = {
       commonArgs.push(...(this.ytdlpExtraArgs as string[]));
     }
 
-    commonArgs.push('-o', '-', url);
+    const effectiveArgs = this._withYtDlpProxyArgs(commonArgs, proxyUrl);
+    effectiveArgs.push('-o', '-', url);
     const candidates: Array<[string, string[]]> = [];
 
     if (this.ytdlpBin) {
-      candidates.push([this.ytdlpBin, commonArgs]);
+      candidates.push([this.ytdlpBin, effectiveArgs]);
     }
 
     candidates.push(
-      ['yt-dlp', commonArgs],
-      ['yt_dlp', commonArgs],
-      ['py', ['-m', 'yt_dlp', ...commonArgs]],
-      ['python', ['-m', 'yt_dlp', ...commonArgs]],
-      ['python3', ['-m', 'yt_dlp', ...commonArgs]]
+      ['yt-dlp', effectiveArgs],
+      ['yt_dlp', effectiveArgs],
+      ['py', ['-m', 'yt_dlp', ...effectiveArgs]],
+      ['python', ['-m', 'yt_dlp', ...effectiveArgs]],
+      ['python3', ['-m', 'yt_dlp', ...effectiveArgs]]
     );
 
     let lastErr: Error | null = null;
@@ -571,7 +595,9 @@ export const pipelineMethods: LooseMethodMap = {
 
     commonArgs.push(searchExpr);
 
-    const { stdout } = await this._runYtDlpCommand(commonArgs, 15_000);
+    const { stdout } = await this._runYtDlpCommandWithProxyFallback(commonArgs, 15_000, {
+      context: 'youtube-search',
+    });
 
     if (!stdout?.trim()) return [];
     let payload;
@@ -651,6 +677,27 @@ export const pipelineMethods: LooseMethodMap = {
         return await tryCandidates(pythonCandidates);
       }
       throw err instanceof Error ? err : new Error(String(err));
+    }
+  },
+
+  async _runYtDlpCommandWithProxyFallback(
+    args: string[],
+    timeoutMs = 12_000,
+    options: { context?: string | null } = {}
+  ) {
+    try {
+      return await this._runYtDlpCommand(args, timeoutMs);
+    } catch (err: unknown) {
+      const proxyUrl = String(this.ytdlpProxyUrl ?? '').trim();
+      if (!proxyUrl || !isRetryableYtDlpProxyError(err)) {
+        throw err;
+      }
+
+      this.logger?.warn?.('yt-dlp command failed, retrying with configured proxy', {
+        context: options.context ?? null,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return this._runYtDlpCommand(this._withYtDlpProxyArgs(args, proxyUrl), timeoutMs);
     }
   },
 

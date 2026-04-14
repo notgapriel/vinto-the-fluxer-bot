@@ -21,9 +21,10 @@ services:
       PREFIX: ${PREFIX:-!}
       FFMPEG_BIN: /usr/bin/ffmpeg
       YTDLP_BIN: /usr/local/bin/yt-dlp
-      YTDLP_COOKIES_FILE: /app/cookies.txt
+      YTDLP_COOKIES_FILE: ${YTDLP_COOKIES_FILE:-}
       YTDLP_YOUTUBE_CLIENT: ${YTDLP_YOUTUBE_CLIENT:-mweb}
       YTDLP_EXTRA_ARGS: ${YTDLP_EXTRA_ARGS:---plugin-dirs,/etc/yt-dlp/plugins,--js-runtimes,node,--remote-components,ejs:github,--extractor-args,youtubepot-bgutilhttp:base_url=http://bgutil-pot:4416}
+      YTDLP_PROXY_URL: ${YTDLP_PROXY_URL:-}
       MONITORING_ENABLED: ${MONITORING_ENABLED:-1}
       MONITORING_HOST: 0.0.0.0
       MONITORING_PORT: ${MONITORING_PORT:-9091}

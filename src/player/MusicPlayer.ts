@@ -126,6 +126,7 @@ interface MusicPlayerOptions {
   ytdlpCookiesFromBrowser?: string | null;
   ytdlpYoutubeClient?: string | null;
   ytdlpExtraArgs?: string[] | string | null;
+  ytdlpProxyUrl?: string | null;
   maxQueueSize?: number;
   maxPlaylistTracks?: number;
   minVolumePercent?: number;
@@ -290,6 +291,12 @@ export class MusicPlayer extends EventEmitter {
   declare _resolveFromUrlFallbackSearch: (url: string, requestedBy: string | null, source: string) => Promise<Track[]>;
   declare _normalizeInputUrl: (url: unknown) => Promise<string>;
   declare _getYtDlpClientStrategies: () => Array<boolean | string>;
+  declare _withYtDlpProxyArgs: (args: string[], proxyUrl?: string | null) => string[];
+  declare _runYtDlpCommandWithProxyFallback: (
+    args: string[],
+    timeoutMs?: number,
+    options?: { context?: string | null }
+  ) => Promise<{ stdout?: string | Buffer | null; stderr?: string | Buffer | null; code?: number | null }>;
   declare _resolveYtDlpStreamUrl: (
     url: string,
     formatSelector?: string | null,
@@ -328,6 +335,7 @@ export class MusicPlayer extends EventEmitter {
   ytdlpCookiesFromBrowser: string | null;
   ytdlpYoutubeClient: string | null;
   ytdlpExtraArgs: string[];
+  ytdlpProxyUrl: string | null;
   maxQueueSize: number;
   maxPlaylistTracks: number;
   minVolumePercent: number;
@@ -418,6 +426,7 @@ export class MusicPlayer extends EventEmitter {
       ? configuredYtDlpExtraArgs
       : parseCsvArgs(configuredYtDlpExtraArgs);
     this.ytdlpExtraArgs = normalizeYtDlpArgs(rawYtDlpExtraArgs);
+    this.ytdlpProxyUrl = String(options.ytdlpProxyUrl ?? process.env.YTDLP_PROXY_URL ?? '').trim() || null;
     this._useRuntimeYtDlpCookiesFile();
     this.maxQueueSize = options.maxQueueSize ?? 100;
     this.maxPlaylistTracks = options.maxPlaylistTracks ?? 25;

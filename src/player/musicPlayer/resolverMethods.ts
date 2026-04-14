@@ -381,7 +381,9 @@ export const resolverMethods: LooseMethodMap = {
       args.push(url);
 
       try {
-        const { stdout } = await this._runYtDlpCommand(args, 15_000);
+        const { stdout } = await this._runYtDlpCommandWithProxyFallback(args, 15_000, {
+          context: 'youtube-single',
+        });
         if (!stdout?.trim()) {
           throw new Error('yt-dlp returned empty metadata payload.');
         }
@@ -570,7 +572,9 @@ export const resolverMethods: LooseMethodMap = {
 
       args.push(url);
 
-      const { stdout } = await this._runYtDlpCommand(args, 25_000).catch(() => ({ stdout: '' }));
+      const { stdout } = await this._runYtDlpCommandWithProxyFallback(args, 25_000, {
+        context: 'youtube-playlist',
+      }).catch(() => ({ stdout: '' }));
       if (!stdout?.trim()) continue;
 
       let payload;
