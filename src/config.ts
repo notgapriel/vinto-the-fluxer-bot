@@ -183,6 +183,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     ytdlpCookiesFromBrowser: env.YTDLP_COOKIES_FROM_BROWSER?.trim() || null,
     ytdlpYoutubeClient: env.YTDLP_YOUTUBE_CLIENT?.trim() || null,
     ytdlpExtraArgs: env.YTDLP_EXTRA_ARGS?.trim() || null,
+    ytdlpProxyUrl: env.YTDLP_PROXY_URL?.trim() || null,
     youtubePlaylistResolver: normalizeYouTubePlaylistResolver(env.YOUTUBE_PLAYLIST_RESOLVER),
 
     defaultDedupeEnabled: parseBool(env.DEFAULT_DEDUPE_ENABLED, false),

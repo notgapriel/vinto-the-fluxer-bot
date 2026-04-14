@@ -78,6 +78,19 @@ export function isRetryableYtDlpStartupError(err: unknown): boolean {
   );
 }
 
+export function isRetryableYtDlpProxyError(err: unknown): boolean {
+  const message = errorMessage(err);
+  return (
+    isYouTubeBotCheckError(err)
+    || message.includes('video unavailable')
+    || message.includes("content isn't available")
+    || message.includes('content isn’t available')
+    || message.includes('playability status: unplayable')
+    || message.includes('http error 403')
+    || message.includes('error 403')
+  );
+}
+
 export function isPlayDlBrowseFailure(err: unknown): boolean {
   const message = errorMessage(err);
   return (

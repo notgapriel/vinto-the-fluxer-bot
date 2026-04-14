@@ -290,6 +290,7 @@ export class SessionManager extends EventEmitter {
       ...(this.config.ytdlpCookiesFromBrowser != null ? { ytdlpCookiesFromBrowser: this.config.ytdlpCookiesFromBrowser } : {}),
       ...(this.config.ytdlpYoutubeClient != null ? { ytdlpYoutubeClient: this.config.ytdlpYoutubeClient } : {}),
       ...(this.config.ytdlpExtraArgs != null ? { ytdlpExtraArgs: this.config.ytdlpExtraArgs } : {}),
+      ...(this.config.ytdlpProxyUrl != null ? { ytdlpProxyUrl: this.config.ytdlpProxyUrl } : {}),
       ...(this.config.youtubePlaylistResolver != null ? { youtubePlaylistResolver: this.config.youtubePlaylistResolver } : {}),
       ...(this.config.maxQueueSize != null ? { maxQueueSize: this.config.maxQueueSize } : {}),
       ...(this.config.maxPlaylistTracks != null ? { maxPlaylistTracks: this.config.maxPlaylistTracks } : {}),

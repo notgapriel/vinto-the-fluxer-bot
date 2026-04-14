@@ -147,7 +147,7 @@ If you use an external MongoDB instead of the bundled container, set:
 MONGODB_URI=mongodb://user:password@your-mongo-host:27017
 ```
 
-The container image already installs `ffmpeg` and the standalone `yt-dlp` package, so YouTube playback dependencies are present inside the app container.
+The container image already installs `ffmpeg`, the standalone `yt-dlp` package, and the `bgutil-ytdlp-pot-provider` plugin. The bundled Compose file also starts the matching PO-token provider sidecar for harder YouTube hosts. YouTube cookies are not enabled by default; set `YTDLP_COOKIES_FILE=/app/cookies.txt` only when a video really needs account access. If YouTube blocks the server IP, set `YTDLP_PROXY_URL` so only failed YouTube attempts are retried through that proxy.
 
 ## Recommended Setups
 
@@ -196,7 +196,7 @@ With `DEEZER_ARL` configured, plain text `play` resolution prefers Deezer before
 
 | Problem | What to check |
 | --- | --- |
-| YouTube playback fails | `ffmpeg`, `yt-dlp`, `YTDLP_COOKIES_FILE`, `YTDLP_COOKIES_FROM_BROWSER`, `YTDLP_YOUTUBE_CLIENT` |
+| YouTube playback fails | `ffmpeg`, `yt-dlp`, `YTDLP_COOKIES_FILE`, `YTDLP_COOKIES_FROM_BROWSER`, `YTDLP_YOUTUBE_CLIENT`, `YTDLP_EXTRA_ARGS`, `YTDLP_PROXY_URL`, `bgutil-pot` |
 | Commands fail but gateway connects | `API_BASE`, token validity, runtime REST access |
 | Voice joins but no audio | Fluxer voice-side setup, `VOICE_MAX_BITRATE`, LiveKit-based publisher flow, and whether a restart recovery snapshot existed before reboot |
 | Container becomes `unhealthy` and just sits there | Docker does not restart a process only because the healthcheck failed. Keep `UNHEALTHY_EXIT_ENABLED=1` so prolonged `/readyz` failure forces a real restart, and inspect gateway/API reachability |
@@ -208,8 +208,10 @@ With `DEEZER_ARL` configured, plain text `play` resolution prefers Deezer before
 
 - make sure `ffmpeg` works on the host
 - install `yt-dlp`
-- if YouTube returns bot checks, set `YTDLP_COOKIES_FILE` or `YTDLP_COOKIES_FROM_BROWSER`
-- if a specific YouTube extractor profile is unstable, try `YTDLP_YOUTUBE_CLIENT=ios,android,web`
+- if a video needs account access, set `YTDLP_COOKIES_FILE` or `YTDLP_COOKIES_FROM_BROWSER`; avoid account cookies for normal public playback
+- for Docker, keep the default `bgutil-pot` sidecar, `YTDLP_YOUTUBE_CLIENT=mweb`, and `YTDLP_EXTRA_ARGS` with the `youtubepot-bgutilhttp` provider URL
+- if your server IP is blocked but a residential proxy works, set `YTDLP_PROXY_URL=http://user:pass@host:port`; the bot retries YouTube through it only after direct yt-dlp fails with a block-like error
+- if a specific YouTube extractor profile is unstable outside Docker, try `YTDLP_YOUTUBE_CLIENT=mweb,android_vr,web_safari`
 - the runtime now retries multiple `yt-dlp` client strategies and can fall back to `play-dl`, so outright startup failures usually point to host binaries or provider-side blocking
 - `ENABLE_YOUTUBE_PREFETCHED_PLAYBACK=1` can improve startup latency for direct YouTube playback, but trades some robustness for speed
 
