@@ -892,8 +892,7 @@ export class MusicPlayer extends EventEmitter {
               : 'ytdlp-url';
           }
         }
-        this.emit('trackError', { track, error: normalized });
-        this.logger?.error?.('Playback setup failed', {
+        const setupFailureLogPayload = {
           track: track.title,
           url: track?.url ?? null,
           source: track?.source ?? null,
@@ -903,7 +902,13 @@ export class MusicPlayer extends EventEmitter {
             ? initialPlaybackChunkTimeoutMs
             : null,
           error: normalized.message,
-        });
+        };
+        if (retryStartupTrack) {
+          this.logger?.warn?.('Playback setup failed before audio output; retrying startup', setupFailureLogPayload);
+        } else {
+          this.emit('trackError', { track, error: normalized });
+          this.logger?.error?.('Playback setup failed', setupFailureLogPayload);
+        }
         const isStartupFloodCandidate = (
           normalizedMessage.includes('did not produce audio output in time')
           || normalizedMessage.includes('before audio output')

@@ -148,6 +148,7 @@ test('play() retries a pre-audio YouTube pipeline exit with yt-dlp url fallback'
   const player = new MusicPlayer(voice, {});
   const startedPipelines: string[] = [];
   let initialChunkAttempts = 0;
+  let trackErrorCount = 0;
 
   player._scheduleNextTrackPrefetch = () => {};
   const installFfmpeg = () => {
@@ -188,6 +189,7 @@ test('play() retries a pre-audio YouTube pipeline exit with yt-dlp url fallback'
 
   assert.deepEqual(startedPipelines, ['youtube', 'ytdlp-url']);
   assert.equal(initialChunkAttempts, 2);
+  assert.equal(trackErrorCount, 0);
   assert.equal(player.currentTrack?.title, 'Fallback Track');
   assert.equal(player.consecutiveStartupFailures, 0);
 });
@@ -197,6 +199,7 @@ test('play() retries a pre-audio YouTube pipeline exit with yt-dlp proxy pipe fa
   const player = new MusicPlayer(voice, { ytdlpProxyUrl: 'http://proxy.example:8080' });
   const startedPipelines: Array<{ name: string; proxyOnly?: boolean }> = [];
   let initialChunkAttempts = 0;
+  let trackErrorCount = 0;
 
   player._scheduleNextTrackPrefetch = () => {};
   const installFfmpeg = () => {
@@ -223,6 +226,12 @@ test('play() retries a pre-audio YouTube pipeline exit with yt-dlp proxy pipe fa
       throw new Error('Playback pipeline exited before audio output (code=1). pipe:0: Invalid data found when processing input');
     }
   };
+  player.on('trackError', () => {
+    trackErrorCount += 1;
+  });
+  player.on('trackError', () => {
+    trackErrorCount += 1;
+  });
 
   player.enqueueResolvedTracks([
     player._buildTrack({
@@ -241,6 +250,7 @@ test('play() retries a pre-audio YouTube pipeline exit with yt-dlp proxy pipe fa
     { name: 'ytdlp-pipe', proxyOnly: true },
   ]);
   assert.equal(initialChunkAttempts, 2);
+  assert.equal(trackErrorCount, 0);
   assert.equal(player.currentTrack?.title, 'Proxy Fallback Track');
 });
 
@@ -473,7 +483,7 @@ test('play() retries a skipped-to YouTube track once with a longer startup timeo
 
   assert.deepEqual(startupTimeouts, [10_000, 22_000]);
   assert.equal(youtubePipelineStarts, 2);
-  assert.equal(trackErrorCount, 1);
+  assert.equal(trackErrorCount, 0);
   assert.equal(queueEmptyCount, 0);
   assert.equal(player.currentTrack?.title, 'Retry Track');
 });
